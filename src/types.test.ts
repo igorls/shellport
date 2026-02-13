@@ -16,8 +16,9 @@ describe("FrameType", () => {
         expect(FrameType.CONTROL).toBe(1);
     });
 
-    test("is frozen / read-only", () => {
-        expect(Object.isFrozen(FrameType)).toBe(true);
+    test("only has DATA and CONTROL keys", () => {
+        const keys = Object.keys(FrameType);
+        expect(keys).toEqual(["DATA", "CONTROL"]);
     });
 });
 

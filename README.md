@@ -204,21 +204,27 @@ const term = new NanoTermV2(container, sendFn, {
 
 > How does ShellPort stack up against other terminal-sharing tools?
 
-| Feature | **ShellPort** | **ttyd** | **GoTTY** | **sshx** | **tmate** | **Upterm** | **Wetty** |
-|---|---|---|---|---|---|---|---|
-| **Language** | TypeScript/JS (Bun) | C | Go | Rust | C (tmux fork) | Go | Node.js |
-| **Terminal Emulator** | NanoTermV2 (Canvas2D) | xterm.js (WebGL2) | hterm / xterm.js | Custom (Rust→WASM) | tmux native | N/A (SSH) | xterm.js |
-| **E2E Encryption** | ✅ AES-256-GCM | ❌ TLS only | ❌ TLS only | ✅ Argon2 + AES | ✅ SSH E2E | ✅ SSH E2E | ❌ TLS only |
-| **Built-in Web UI** | ✅ | ✅ | ✅ | ✅ | ✅ (HTML5) | ❌ | ✅ |
-| **Multi-Session Tabs** | ✅ | ❌ | ❌ | ✅ (infinite canvas) | ✅ (tmux windows) | ❌ | ❌ |
-| **CLI Client** | ✅ | ❌ | ❌ | ❌ | ✅ (SSH) | ✅ (SSH) | ❌ |
-| **Collaboration** | ❌ | ❌ | ❌ | ✅ Live cursors | ✅ Shared session | ✅ Shared session | ❌ |
-| **File Transfer** | ❌ | ✅ ZMODEM | ❌ | ❌ | ❌ | ✅ SFTP/SCP | ❌ |
-| **NAT Traversal** | ✅ Tailscale (CLI) | ❌ | ❌ | ✅ Relay server | ✅ Relay server | ✅ Reverse SSH | ❌ |
-| **Dependencies** | **0** | libwebsockets, OpenSSL | Go stdlib | Tokio, wasm-bindgen | tmux, SSH | Go stdlib | Node.js, SSH |
-| **Binary Size** | ~5 MB (Bun compiled) | ~1 MB | ~10 MB | ~5 MB | ~2 MB | ~10 MB | N/A (Node) |
-| **Self-Contained** | ✅ Single binary | ✅ Single binary | ✅ Single binary | ✅ Single binary | ❌ Needs tmux | ✅ Single binary | ❌ Node project |
-| **Active** | ✅ 2025+ | ✅ | ⚠️ Abandoned | ✅ | ✅ | ⚠️ Mixed | ✅ |
+### Core
+
+| | ShellPort | ttyd | GoTTY | sshx | tmate | Upterm |
+|:--|:--:|:--:|:--:|:--:|:--:|:--:|
+| **E2E Encryption** | ✅ AES-256 | ❌ | ❌ | ✅ Argon2 | ✅ SSH | ✅ SSH |
+| **Web UI** | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Multi-Session** | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
+| **CLI Client** | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ |
+| **Zero Deps** | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ |
+| **Single Binary** | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
+
+### Extras
+
+| | ShellPort | ttyd | GoTTY | sshx | tmate | Upterm |
+|:--|:--:|:--:|:--:|:--:|:--:|:--:|
+| **Collaboration** | — | — | — | ✅ Live cursors | ✅ Shared | ✅ Shared |
+| **File Transfer** | — | ✅ ZMODEM | — | — | — | ✅ SFTP |
+| **NAT Traversal** | ✅ Tailscale | — | — | ✅ Relay | ✅ Relay | ✅ Rev. SSH |
+| **Language** | TS (Bun) | C | Go | Rust | C | Go |
+| **Terminal** | Canvas2D | xterm.js | hterm | WASM | tmux | SSH |
+| **Active** | ✅ | ✅ | ⚠️ | ✅ | ✅ | ⚠️ |
 
 ### When to pick what
 

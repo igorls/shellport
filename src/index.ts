@@ -9,36 +9,51 @@ import { startServer } from "./server.js";
 import { connectClient } from "./client.js";
 import { generateSecret } from "./crypto.js";
 
-const VERSION = "0.1.0";
+export const VERSION = "0.1.0";
 
-const args = process.argv.slice(2);
-const command = args[0] || "help";
-
-let port = 7681;
-let secret = process.env.SHELLPORT_SECRET || "";
-let tailscale = "";
-let url = "";
-let noSecret = false;
-let secretExplicit = false;
-
-for (let i = 1; i < args.length; i++) {
-    if (args[i] === "--port" || args[i] === "-p") {
-        port = parseInt(args[++i], 10);
-    } else if (args[i] === "--secret" || args[i] === "-s") {
-        secret = args[++i];
-        secretExplicit = true;
-    } else if (args[i] === "--no-secret") {
-        noSecret = true;
-    } else if (args[i] === "--tailscale") {
-        tailscale = args[++i];
-    } else if (!args[i].startsWith("--")) {
-        url = args[i];
-    }
+export interface ParsedArgs {
+    command: string;
+    port: number;
+    secret: string;
+    tailscale: string;
+    url: string;
+    noSecret: boolean;
 }
 
-if (command === "server" || command === "serve") {
+/** Parse CLI arguments into a structured object. */
+export function parseArgs(argv: string[]): ParsedArgs {
+    const command = argv[0] || "help";
+    let port = 7681;
+    let secret = "";
+    let tailscale = "";
+    let url = "";
+    let noSecret = false;
+
+    for (let i = 1; i < argv.length; i++) {
+        if (argv[i] === "--port" || argv[i] === "-p") {
+            port = parseInt(argv[++i], 10);
+        } else if (argv[i] === "--secret" || argv[i] === "-s") {
+            secret = argv[++i];
+        } else if (argv[i] === "--no-secret") {
+            noSecret = true;
+        } else if (argv[i] === "--tailscale") {
+            tailscale = argv[++i];
+        } else if (!argv[i].startsWith("--")) {
+            url = argv[i];
+        }
+    }
+
+    return { command, port, secret, tailscale, url, noSecret };
+}
+
+const parsed = parseArgs(process.argv.slice(2));
+
+if (parsed.command === "server" || parsed.command === "serve") {
+    let secret = parsed.secret || process.env.SHELLPORT_SECRET || "";
+    const secretExplicit = !!parsed.secret;
+
     // Auto-generate a random secret if none provided
-    if (!secret && !noSecret) {
+    if (!secret && !parsed.noSecret) {
         secret = generateSecret();
         console.log(`[ShellPort] 🎲 Auto-generated session secret (not persisted)`);
     }
@@ -47,10 +62,10 @@ if (command === "server" || command === "serve") {
         console.log(`[ShellPort] ⚠️  Using fixed secret. Auto-generated secrets (the default) are recommended for better security.`);
     }
 
-    startServer({ port, secret, tailscale });
-} else if (command === "client" || command === "connect") {
-    connectClient({ url, secret });
-} else if (command === "--version" || command === "-v") {
+    startServer({ port: parsed.port, secret, tailscale: parsed.tailscale });
+} else if (parsed.command === "client" || parsed.command === "connect") {
+    connectClient({ url: parsed.url, secret: parsed.secret });
+} else if (parsed.command === "--version" || parsed.command === "-v") {
     console.log(`shellport v${VERSION}`);
 } else {
     console.log(`
@@ -96,3 +111,4 @@ if (command === "server" || command === "serve") {
     # http://localhost:7681/#<secret>
 `);
 }
+

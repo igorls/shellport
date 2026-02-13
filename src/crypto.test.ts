@@ -31,7 +31,7 @@ describe("deriveKey", () => {
         // Encrypt with key1, decrypt with key2 — must succeed
         const payload = new TextEncoder().encode("hello");
         const packed = await pack(key1, FrameType.DATA, payload);
-        const decoded = await unpack(key2, packed.buffer);
+        const decoded = await unpack(key2, packed.buffer as ArrayBuffer);
 
         expect(decoded).not.toBeNull();
         expect(decoded!.type).toBe(FrameType.DATA);
@@ -48,7 +48,7 @@ describe("pack / unpack", () => {
         const payload = new TextEncoder().encode("encrypted message");
 
         const packed = await pack(key, FrameType.DATA, payload);
-        const decoded = await unpack(key, packed.buffer);
+        const decoded = await unpack(key, packed.buffer as ArrayBuffer);
 
         expect(decoded).not.toBeNull();
         expect(decoded!.type).toBe(FrameType.DATA);
@@ -59,7 +59,7 @@ describe("pack / unpack", () => {
         const payload = new TextEncoder().encode("plaintext message");
 
         const packed = await pack(null, FrameType.CONTROL, payload);
-        const decoded = await unpack(null, packed.buffer);
+        const decoded = await unpack(null, packed.buffer as ArrayBuffer);
 
         expect(decoded).not.toBeNull();
         expect(decoded!.type).toBe(FrameType.CONTROL);
@@ -71,7 +71,7 @@ describe("pack / unpack", () => {
         const payload = new Uint8Array([0x00, 0xff, 0x42, 0x80, 0x01]);
 
         const packed = await pack(key, FrameType.DATA, payload);
-        const decoded = await unpack(key, packed.buffer);
+        const decoded = await unpack(key, packed.buffer as ArrayBuffer);
 
         expect(decoded).not.toBeNull();
         expect(decoded!.type).toBe(FrameType.DATA);
@@ -83,7 +83,7 @@ describe("pack / unpack", () => {
         const payload = new Uint8Array(0);
 
         const packed = await pack(key, FrameType.DATA, payload);
-        const decoded = await unpack(key, packed.buffer);
+        const decoded = await unpack(key, packed.buffer as ArrayBuffer);
 
         expect(decoded).not.toBeNull();
         expect(decoded!.type).toBe(FrameType.DATA);
@@ -126,7 +126,7 @@ describe("unpack error handling", () => {
         const keyB = await deriveKey("key-beta");
 
         const packed = await pack(keyA, FrameType.DATA, new TextEncoder().encode("secret"));
-        const decoded = await unpack(keyB, packed.buffer);
+        const decoded = await unpack(keyB, packed.buffer as ArrayBuffer);
 
         expect(decoded).toBeNull();
     });
@@ -135,7 +135,7 @@ describe("unpack error handling", () => {
         const key = await deriveKey("truncation-key");
         const shortData = new Uint8Array(20); // Too short for IV + ciphertext + tag
 
-        const decoded = await unpack(key, shortData.buffer);
+        const decoded = await unpack(key, shortData.buffer as ArrayBuffer);
         expect(decoded).toBeNull();
     });
 
@@ -147,7 +147,7 @@ describe("unpack error handling", () => {
         const corrupted = new Uint8Array(packed);
         corrupted[20] ^= 0xff;
 
-        const decoded = await unpack(key, corrupted.buffer);
+        const decoded = await unpack(key, corrupted.buffer as ArrayBuffer);
         expect(decoded).toBeNull();
     });
 
