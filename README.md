@@ -18,7 +18,7 @@
 Share your shell over the network with **end-to-end AES-256-GCM encryption**, a **custom canvas terminal emulator**, and **multi-session tabs** — all packed into one file powered by [Bun](https://bun.sh). No xterm.js. No node_modules. No config files.
 
 ```bash
-shellport server --secret your-secret-here
+shellport server
 ```
 
 Then open `http://localhost:7681/#your-secret-here` in your browser. That's it.
@@ -89,7 +89,7 @@ Most web terminal tools either force you to haul in xterm.js + a Node.js runtime
 ### Quick Start (requires Bun)
 
 ```bash
-bunx shellport server --secret mypassword
+bunx shellport server
 ```
 
 ### Prebuilt Binary
@@ -99,7 +99,7 @@ Download from [GitHub Releases](https://github.com/igorls/shellport/releases):
 ```bash
 curl -fsSL https://github.com/igorls/shellport/releases/latest/download/shellport-linux-x64 -o shellport
 chmod +x shellport
-./shellport server --secret mypassword
+./shellport server
 ```
 
 ### From Source
