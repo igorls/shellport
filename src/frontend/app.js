@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // ShellPort - Session Manager & UI Logic
+// Protocol v2: Per-session salt handshake
 // ═══════════════════════════════════════════════════════════════════════════
 
 let cryptoKey = null;
@@ -11,13 +12,15 @@ const wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + locatio
 
 async function init() {
     const secret = location.hash.substring(1);
-    cryptoKey = await deriveKey(secret);
-
     const status = document.getElementById('enc-status');
-    if (cryptoKey) {
-        status.innerHTML = '🔒 AES-256-GCM';
-        status.classList.add('secure');
-        history.replaceState(null, '', location.pathname);
+    
+    if (status) {
+        if (secret) {
+            status.innerHTML = '⏳ Negotiating...';
+        } else {
+            status.innerHTML = '⚠️ No encryption';
+            status.classList.add('warning');
+        }
     }
 
     document.getElementById('new-session').addEventListener('click', createSession);
@@ -74,11 +77,12 @@ function switchSession(id) {
 function createSession() {
     sessionCount++;
     const id = 'session-' + Date.now();
+    const secret = location.hash.substring(1);
 
     // Create sidebar item
     const li = document.createElement('li');
     li.innerHTML = `
-    <span class="session-status running"></span>
+    <span class="session-status pending"></span>
     <span class="session-label">Session ${sessionCount}</span>
     <span class="close-btn">×</span>
   `;
@@ -114,17 +118,30 @@ function createSession() {
     const sendQ = new SeqQueue();
     const recvQ = new SeqQueue();
 
+    let sessionKey = null;
+    let serverNonce = null;
+    let clientNonce = null;
+    let handshakeComplete = false;
+
     const sendMsg = (type, payload) => sendQ.add(async () => {
-        if (ws.readyState === 1) ws.send(await pack(cryptoKey, type, payload));
+        if (ws.readyState === 1) {
+            if (type === 2) { // CLIENT_NONCE - sent unencrypted
+                ws.send(await pack(null, type, payload));
+            } else if (sessionKey) {
+                ws.send(await pack(sessionKey, type, payload));
+            }
+        }
     });
 
     // Create terminal
     const term = new NanoTermV2(canvasContainer, data => {
+        if (!handshakeComplete) return;
         const encoder = new TextEncoder();
         sendMsg(0, encoder.encode(data));
     });
 
     term.onResize = (cols, rows) => {
+        if (!handshakeComplete) return;
         sendMsg(1, new TextEncoder().encode(JSON.stringify({ type: 'resize', cols, rows })));
         updateStatusBar(id);
     };
@@ -134,25 +151,96 @@ function createSession() {
         if (label) label.textContent = title.slice(0, 30);
     };
 
-    ws.onopen = () => {
-        term.resize();
-        term.canvas.focus();
+    // Clipboard permission callback
+    term.onClipboardWrite = (text) => {
+        return confirm('Allow remote clipboard write?\n\nContent length: ' + text.length + ' characters');
     };
 
-    ws.onmessage = e => recvQ.add(async () => {
-        const decoded = await unpack(cryptoKey, e.data);
-        if (decoded && decoded.type === 0) {
-            term.write(decoded.payload);
-        }
-    });
+    ws.onopen = () => {
+        term.write('\x1b[90mConnecting...\x1b[0m\r\n');
+    };
 
-    ws.onclose = () => {
+    ws.onmessage = async e => {
+        const data = e.data;
+        
+        // Protocol v2: First message from server is the nonce
+        if (!serverNonce && secret) {
+            serverNonce = new Uint8Array(data);
+            clientNonce = generateNonce();
+            
+            // Send client nonce
+            sendMsg(2, clientNonce);  // FrameType.CLIENT_NONCE
+            
+            // Derive per-session key
+            const sessionSalt = await deriveSessionSalt(serverNonce, clientNonce);
+            sessionKey = await deriveKey(secret, sessionSalt);
+            
+            const statusEl = li.querySelector('.session-status');
+            if (statusEl) {
+                statusEl.classList.remove('pending');
+                statusEl.classList.add('running');
+            }
+            
+            const encStatus = document.getElementById('enc-status');
+            if (encStatus) {
+                encStatus.innerHTML = '🔒 AES-256-GCM';
+                encStatus.classList.add('secure');
+            }
+            
+            term.write('\x1b[2K\x1b[G');  // Clear "Connecting..." line
+            term.resize();
+            term.canvas.focus();
+            handshakeComplete = true;
+            history.replaceState(null, '', location.pathname);
+            return;
+        }
+        
+        // Plaintext mode
+        if (!secret && !handshakeComplete) {
+            handshakeComplete = true;
+            const statusEl = li.querySelector('.session-status');
+            if (statusEl) {
+                statusEl.classList.remove('pending');
+                statusEl.classList.add('running');
+            }
+            term.write('\x1b[2K\x1b[G');
+            term.resize();
+            term.canvas.focus();
+            return;
+        }
+
+        // Normal encrypted message handling
+        recvQ.add(async () => {
+            const decoded = await unpack(sessionKey || await deriveKey(secret), data);
+            if (decoded && decoded.type === 0) {
+                term.write(decoded.payload);
+            }
+        });
+    };
+
+    ws.onclose = (e) => {
         const statusEl = li.querySelector('.session-status');
         if (statusEl) {
-            statusEl.classList.remove('running');
+            statusEl.classList.remove('pending', 'running');
             statusEl.classList.add('exited');
         }
-        term.write('\r\n[Disconnected]\r\n');
+        
+        let reason = 'Disconnected';
+        if (e.code === 4001) reason = 'Authentication timeout';
+        else if (e.code === 4003) reason = e.reason || 'Access denied';
+        else if (e.code === 1000) reason = 'Session ended';
+        else if (e.code === 1011) reason = 'Server error';
+        
+        term.write(`\r\n\x1b[31m[${reason}]\x1b[0m\r\n`);
+        
+        if (!handshakeComplete) {
+            const encStatus = document.getElementById('enc-status');
+            if (encStatus) {
+                encStatus.innerHTML = '❌ ' + reason;
+                encStatus.classList.remove('secure');
+                encStatus.classList.add('error');
+            }
+        }
     };
 
     // Cleanup

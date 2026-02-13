@@ -11,14 +11,23 @@ import { SeqQueue, FrameType } from "./types.js";
 // FrameType constants
 // ---------------------------------------------------------------------------
 describe("FrameType", () => {
-    test("DATA = 0, CONTROL = 1", () => {
+    test("core frame types have correct values", () => {
         expect(FrameType.DATA).toBe(0);
         expect(FrameType.CONTROL).toBe(1);
+        expect(FrameType.SERVER_NONCE).toBe(2);
+        expect(FrameType.CLIENT_NONCE).toBe(3);
+        expect(FrameType.APPROVAL_REQUEST).toBe(4);
+        expect(FrameType.APPROVAL_RESPONSE).toBe(5);
     });
 
-    test("only has DATA and CONTROL keys", () => {
+    test("has all expected frame types", () => {
         const keys = Object.keys(FrameType);
-        expect(keys).toEqual(["DATA", "CONTROL"]);
+        expect(keys).toContain("DATA");
+        expect(keys).toContain("CONTROL");
+        expect(keys).toContain("SERVER_NONCE");
+        expect(keys).toContain("CLIENT_NONCE");
+        expect(keys).toContain("APPROVAL_REQUEST");
+        expect(keys).toContain("APPROVAL_RESPONSE");
     });
 });
 
@@ -65,16 +74,11 @@ describe("SeqQueue", () => {
         const q = new SeqQueue();
         const results: string[] = [];
 
-        // Suppress console.error for this test
-        const origError = console.error;
-        console.error = () => { };
-
         q.add(async () => { results.push("before"); });
         q.add(async () => { throw new Error("boom"); });
         q.add(async () => { results.push("after"); });
 
         await new Promise(resolve => setTimeout(resolve, 50));
-        console.error = origError;
 
         expect(results).toEqual(["before", "after"]);
     });

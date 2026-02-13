@@ -3,20 +3,29 @@
  *
  * Provides key derivation, message packing (encrypt), and unpacking (decrypt).
  * Works identically on server (Bun) and client (browser) via WebCrypto API.
+ *
+ * Security Model (v2):
+ * - Per-session salt derived from server_nonce || client_nonce || "shellport-v2"
+ * - Prevents precomputation attacks against weak passwords
+ * - Server sends nonce immediately on WebSocket open
+ * - Client includes its nonce in the first message
  */
 
 import type { DecodedFrame, FrameTypeValue } from "./types.js";
 
-const SALT = "shellport-v1-salt";
 const PBKDF2_ITERATIONS = 100_000;
+const NONCE_LENGTH = 16;
+const SALT_PREFIX = "shellport-v2";
+
+export const PROTOCOL_VERSION = 2;
 
 /**
  * Generate a cryptographically random URL-safe secret.
  * Used as the default when no --secret is provided.
+ * Default 16 bytes = 128 bits of entropy.
  */
-export function generateSecret(bytes = 9): string {
+export function generateSecret(bytes = 16): string {
   const raw = crypto.getRandomValues(new Uint8Array(bytes));
-  // Base64url encoding (no padding) — safe for URL fragments
   const b64 = btoa(String.fromCharCode(...raw))
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
@@ -25,10 +34,39 @@ export function generateSecret(bytes = 9): string {
 }
 
 /**
+ * Generate a random nonce for per-session salt derivation.
+ */
+export function generateNonce(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(NONCE_LENGTH));
+}
+
+/**
+ * Derive per-session salt from server and client nonces.
+ * Salt = SHA-256(server_nonce || client_nonce || SALT_PREFIX)
+ */
+export async function deriveSessionSalt(
+  serverNonce: Uint8Array,
+  clientNonce: Uint8Array
+): Promise<Uint8Array> {
+  const data = new Uint8Array(serverNonce.length + clientNonce.length + SALT_PREFIX.length);
+  data.set(serverNonce, 0);
+  data.set(clientNonce, serverNonce.length);
+  data.set(new TextEncoder().encode(SALT_PREFIX), serverNonce.length + clientNonce.length);
+  
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return new Uint8Array(hash);
+}
+
+/**
  * Derive an AES-256-GCM key from a plaintext secret using PBKDF2.
+ * @param secret - The user-provided secret
+ * @param sessionSalt - Optional per-session salt (from deriveSessionSalt)
  * Returns null if no secret is provided (plaintext mode).
  */
-export async function deriveKey(secret: string): Promise<CryptoKey | null> {
+export async function deriveKey(
+  secret: string,
+  sessionSalt?: Uint8Array
+): Promise<CryptoKey | null> {
   if (!secret) return null;
 
   const enc = new TextEncoder();
@@ -40,10 +78,12 @@ export async function deriveKey(secret: string): Promise<CryptoKey | null> {
     ["deriveBits", "deriveKey"]
   );
 
+  const salt: BufferSource = sessionSalt ? sessionSalt.buffer as ArrayBuffer : enc.encode(SALT_PREFIX);
+
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt: enc.encode(SALT),
+      salt,
       iterations: PBKDF2_ITERATIONS,
       hash: "SHA-256",
     },
@@ -117,8 +157,25 @@ export async function unpack(
  */
 export function getCryptoJS(): string {
   return `
-// Derive AES-256-GCM key from secret using PBKDF2
-async function deriveKey(secret) {
+// ShellPort Crypto Engine v${PROTOCOL_VERSION}
+const NONCE_LENGTH = ${NONCE_LENGTH};
+const SALT_PREFIX = "${SALT_PREFIX}";
+const PBKDF2_ITERATIONS = ${PBKDF2_ITERATIONS};
+
+function generateNonce() {
+  return crypto.getRandomValues(new Uint8Array(NONCE_LENGTH));
+}
+
+async function deriveSessionSalt(serverNonce, clientNonce) {
+  const data = new Uint8Array(serverNonce.length + clientNonce.length + SALT_PREFIX.length);
+  data.set(serverNonce, 0);
+  data.set(clientNonce, serverNonce.length);
+  data.set(new TextEncoder().encode(SALT_PREFIX), serverNonce.length + clientNonce.length);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return new Uint8Array(hash);
+}
+
+async function deriveKey(secret, sessionSalt) {
   if (!secret) return null;
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
@@ -128,11 +185,12 @@ async function deriveKey(secret) {
     false,
     ["deriveBits", "deriveKey"]
   );
+  const salt = sessionSalt || enc.encode(SALT_PREFIX);
   return crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
-      salt: enc.encode("${SALT}"),
-      iterations: ${PBKDF2_ITERATIONS},
+      salt,
+      iterations: PBKDF2_ITERATIONS,
       hash: "SHA-256"
     },
     keyMaterial,

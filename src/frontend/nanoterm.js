@@ -3,6 +3,9 @@
 // Hardware-accelerated Canvas2D renderer with zero dependencies
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Maximum buffer size for OSC/DCS sequences (64 KB)
+const MAX_SEQUENCE_SIZE = 65536;
+
 // Standard xterm 256-color palette
 const XTERM_256_PALETTE = [
     // 0-15: Standard colors (matched to our theme)
@@ -174,6 +177,9 @@ class NanoTermV2 {
         this.parseIntermediates = '';
         this.oscBuffer = '';
         this.dcsBuffer = '';
+
+        // Security: callback for clipboard write permission
+        this.onClipboardWrite = null;
 
         // Mouse tracking
         this.mouseTracking = 0;
@@ -471,7 +477,10 @@ class NanoTermV2 {
         } else if (code === 0x1B) {
             this.parseIntermediates = '\\';
         } else {
-            this.oscBuffer += c;
+            // Security: limit OSC buffer size to prevent memory exhaustion
+            if (this.oscBuffer.length < MAX_SEQUENCE_SIZE) {
+                this.oscBuffer += c;
+            }
         }
     }
 
@@ -482,7 +491,10 @@ class NanoTermV2 {
             this.executeDCS(this.dcsBuffer);
             this.parseState = 'ground';
         } else {
-            this.dcsBuffer += c;
+            // Security: limit DCS buffer size to prevent memory exhaustion
+            if (this.dcsBuffer.length < MAX_SEQUENCE_SIZE) {
+                this.dcsBuffer += c;
+            }
         }
     }
 
@@ -727,6 +739,9 @@ class NanoTermV2 {
     // -------------------------------------------------------------------------
 
     executeOSC(data) {
+        // Security: limit parsed data size
+        if (data.length > MAX_SEQUENCE_SIZE) return;
+        
         const semiIndex = data.indexOf(';');
         if (semiIndex === -1) return;
 
@@ -739,10 +754,20 @@ class NanoTermV2 {
                 if (this.onTitle) this.onTitle(arg);
                 break;
             case '52':
+                // OSC 52: Clipboard operations - require user confirmation for writes
                 if (arg.startsWith('c;')) {
                     try {
                         const text = atob(arg.slice(2));
-                        navigator.clipboard.writeText(text).catch(() => { });
+                        // Security: prompt user before allowing clipboard write
+                        if (this.onClipboardWrite) {
+                            if (this.onClipboardWrite(text)) {
+                                navigator.clipboard.writeText(text).catch(() => { });
+                            }
+                        } else {
+                            // Default: allow with console warning
+                            console.warn('[ShellPort] OSC 52 clipboard write requested - consider setting onClipboardWrite callback');
+                            navigator.clipboard.writeText(text).catch(() => { });
+                        }
                     } catch { }
                 }
                 break;

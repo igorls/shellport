@@ -9,7 +9,7 @@ import { startServer } from "./server.js";
 import { connectClient } from "./client.js";
 import { generateSecret } from "./crypto.js";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 export interface ParsedArgs {
     command: string;
@@ -18,6 +18,9 @@ export interface ParsedArgs {
     tailscale: string;
     url: string;
     noSecret: boolean;
+    requireApproval: boolean;
+    allowLocalhost: boolean;
+    quiet: boolean;
 }
 
 /** Parse CLI arguments into a structured object. */
@@ -28,6 +31,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
     let tailscale = "";
     let url = "";
     let noSecret = false;
+    let requireApproval = true;
+    let allowLocalhost = false;
+    let quiet = false;
 
     for (let i = 1; i < argv.length; i++) {
         if (argv[i] === "--port" || argv[i] === "-p") {
@@ -38,12 +44,18 @@ export function parseArgs(argv: string[]): ParsedArgs {
             noSecret = true;
         } else if (argv[i] === "--tailscale") {
             tailscale = argv[++i];
+        } else if (argv[i] === "--no-approval") {
+            requireApproval = false;
+        } else if (argv[i] === "--allow-localhost" || argv[i] === "--dev") {
+            allowLocalhost = true;
+        } else if (argv[i] === "--quiet" || argv[i] === "-q") {
+            quiet = true;
         } else if (!argv[i].startsWith("--")) {
             url = argv[i];
         }
     }
 
-    return { command, port, secret, tailscale, url, noSecret };
+    return { command, port, secret, tailscale, url, noSecret, requireApproval, allowLocalhost, quiet };
 }
 
 const parsed = parseArgs(process.argv.slice(2));
@@ -52,17 +64,24 @@ if (parsed.command === "server" || parsed.command === "serve") {
     let secret = parsed.secret || process.env.SHELLPORT_SECRET || "";
     const secretExplicit = !!parsed.secret;
 
-    // Auto-generate a random secret if none provided
     if (!secret && !parsed.noSecret) {
         secret = generateSecret();
-        console.log(`[ShellPort] 🎲 Auto-generated session secret (not persisted)`);
+        if (!parsed.quiet) {
+            console.log(`[ShellPort] 🎲 Auto-generated session secret (not persisted)`);
+        }
     }
 
-    if (secretExplicit) {
+    if (secretExplicit && !parsed.quiet) {
         console.log(`[ShellPort] ⚠️  Using fixed secret. Auto-generated secrets (the default) are recommended for better security.`);
     }
 
-    startServer({ port: parsed.port, secret, tailscale: parsed.tailscale });
+    startServer({ 
+        port: parsed.port, 
+        secret, 
+        tailscale: parsed.tailscale,
+        requireApproval: parsed.requireApproval,
+        allowLocalhost: parsed.allowLocalhost,
+    });
 } else if (parsed.command === "client" || parsed.command === "connect") {
     connectClient({ url: parsed.url, secret: parsed.secret });
 } else if (parsed.command === "--version" || parsed.command === "-v") {
@@ -83,17 +102,31 @@ if (parsed.command === "server" || parsed.command === "serve") {
     --port, -p <n>           Port (default: 7681)
     --secret, -s <key>       Fixed encryption secret (auto-generated if omitted)
     --no-secret              Disable encryption entirely (plaintext mode)
+    --no-approval            Disable interactive connection approval
+    --allow-localhost, --dev Allow localhost origin bypass (dev mode)
     --tailscale <serve|funnel>  Tailscale integration
+    --quiet, -q              Suppress non-essential output
 
   Environment:
     SHELLPORT_SECRET         Fixed encryption secret (avoids exposing in ps)
 
-  By default, the server generates a random secret on each launch and
-  prints it to the console. Use --no-secret to run without encryption.
+  Security:
+    By default, connections require interactive approval from the server host.
+    Use --no-approval to disable this (not recommended for public networks).
+
+    Per-session cryptographic salts prevent precomputation attacks.
+    Origin header validation is strict by default. Use --allow-localhost
+    for local development.
 
   Examples:
-    # Start with auto-generated secret (recommended)
+    # Start with full security (recommended)
     shellport server
+
+    # Start with auto-approval (trusted networks only)
+    shellport server --no-approval
+
+    # Dev mode with localhost bypass
+    shellport server --dev
 
     # Start with a fixed secret
     shellport server --secret your-secret-here
@@ -111,4 +144,3 @@ if (parsed.command === "server" || parsed.command === "serve") {
     # http://localhost:7681/#<secret>
 `);
 }
-
