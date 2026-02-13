@@ -1,0 +1,7 @@
+/bridge.ts
+/bridge2.ts
+/node_modules
+/shellport
+/dist
+.env
+*.log

@@ -1,0 +1,47 @@
+{
+  "name": "shellport",
+  "version": "0.1.0",
+  "description": "Zero-dependency encrypted terminal bridge with built-in web UI. Share your shell over the network with E2E encryption, powered by Bun.",
+  "type": "module",
+  "bin": {
+    "shellport": "./src/index.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./nanoterm": "./src/frontend/nanoterm.js"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts server",
+    "build": "bun build ./src/index.ts --compile --minify --bytecode --outfile shellport",
+    "build:binaries": "bun run scripts/build-binaries.ts",
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "keywords": [
+    "terminal",
+    "pty",
+    "websocket",
+    "encryption",
+    "shell",
+    "remote",
+    "bun",
+    "zero-dependency",
+    "canvas",
+    "vt100",
+    "xterm"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "files": [
+    "src/**/*",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
