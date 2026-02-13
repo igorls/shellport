@@ -44,6 +44,47 @@ const DEC_SPECIAL_GRAPHICS = {
     '~': '·'
 };
 
+// Box Drawing segment table: index = codePoint - 0x2500
+// Each entry: [left, right, up, down] where 0=none, 1=light, 2=heavy, 3=double
+// null entries fall back to font glyph rendering
+const BOX_DRAWING_SEGMENTS = [
+    [1, 1, 0, 0], [2, 2, 0, 0], [0, 0, 1, 1], [0, 0, 2, 2], // 2500-2503 ─━│┃
+    [1, 1, 0, 0], [2, 2, 0, 0], [0, 0, 1, 1], [0, 0, 2, 2], // 2504-2507 ┄┅┆┇
+    [1, 1, 0, 0], [2, 2, 0, 0], [0, 0, 1, 1], [0, 0, 2, 2], // 2508-250B ┈┉┊┋
+    [0, 1, 0, 1], [0, 2, 0, 1], [0, 1, 0, 2], [0, 2, 0, 2], // 250C-250F ┌┍┎┏
+    [1, 0, 0, 1], [2, 0, 0, 1], [1, 0, 0, 2], [2, 0, 0, 2], // 2510-2513 ┐┑┒┓
+    [0, 1, 1, 0], [0, 2, 1, 0], [0, 1, 2, 0], [0, 2, 2, 0], // 2514-2517 └┕┖┗
+    [1, 0, 1, 0], [2, 0, 1, 0], [1, 0, 2, 0], [2, 0, 2, 0], // 2518-251B ┘┙┚┛
+    [0, 1, 1, 1], [0, 2, 1, 1], [0, 1, 2, 1], [0, 1, 1, 2], // 251C-251F ├┝┞┟
+    [0, 1, 2, 2], [0, 2, 2, 1], [0, 2, 1, 2], [0, 2, 2, 2], // 2520-2523 ┠┡┢┣
+    [1, 0, 1, 1], [2, 0, 1, 1], [1, 0, 2, 1], [1, 0, 1, 2], // 2524-2527 ┤┥┦┧
+    [1, 0, 2, 2], [2, 0, 2, 1], [2, 0, 1, 2], [2, 0, 2, 2], // 2528-252B ┨┩┪┫
+    [1, 1, 0, 1], [2, 1, 0, 1], [1, 2, 0, 1], [2, 2, 0, 1], // 252C-252F ┬┭┮┯
+    [1, 1, 0, 2], [2, 1, 0, 2], [1, 2, 0, 2], [2, 2, 0, 2], // 2530-2533 ┰┱┲┳
+    [1, 1, 1, 0], [2, 1, 1, 0], [1, 2, 1, 0], [2, 2, 1, 0], // 2534-2537 ┴┵┶┷
+    [1, 1, 2, 0], [2, 1, 2, 0], [1, 2, 2, 0], [2, 2, 2, 0], // 2538-253B ┸┹┺┻
+    [1, 1, 1, 1], [2, 1, 1, 1], [1, 2, 1, 1], [2, 2, 1, 1], // 253C-253F ┼┽┾┿
+    [1, 1, 2, 1], [1, 1, 1, 2], [1, 1, 2, 2], [2, 1, 2, 1], // 2540-2543 ╀╁╂╃
+    [1, 2, 2, 1], [2, 1, 1, 2], [1, 2, 1, 2], [2, 2, 2, 1], // 2544-2547 ╄╅╆╇
+    [2, 2, 1, 2], [2, 1, 2, 2], [1, 2, 2, 2], [2, 2, 2, 2], // 2548-254B ╈╉╊╋
+    [1, 1, 0, 0], [2, 2, 0, 0], [0, 0, 1, 1], [0, 0, 2, 2], // 254C-254F ╌╍╎╏
+    [3, 3, 0, 0], [0, 0, 3, 3],                       // 2550-2551 ═║
+    [0, 3, 0, 1], [0, 1, 0, 3], [0, 3, 0, 3],             // 2552-2554 ╒╓╔
+    [3, 0, 0, 1], [1, 0, 0, 3], [3, 0, 0, 3],             // 2555-2557 ╕╖╗
+    [0, 3, 1, 0], [0, 1, 3, 0], [0, 3, 3, 0],             // 2558-255A ╘╙╚
+    [3, 0, 1, 0], [1, 0, 3, 0], [3, 0, 3, 0],             // 255B-255D ╛╜╝
+    [0, 3, 1, 1], [0, 1, 3, 3], [0, 3, 3, 3],             // 255E-2560 ╞╟╠
+    [3, 0, 1, 1], [1, 0, 3, 3], [3, 0, 3, 3],             // 2561-2563 ╡╢╣
+    [3, 3, 0, 1], [1, 1, 0, 3], [3, 3, 0, 3],             // 2564-2566 ╤╥╦
+    [3, 3, 1, 0], [1, 1, 3, 0], [3, 3, 3, 0],             // 2567-2569 ╧╨╩
+    [3, 3, 1, 1], [1, 1, 3, 3], [3, 3, 3, 3],             // 256A-256C ╪╫╬
+    [0, 1, 0, 1], [1, 0, 0, 1], [1, 0, 1, 0], [0, 1, 1, 0],   // 256D-2570 ╭╮╯╰
+    null, null, null,                            // 2571-2573 ╱╲╳ (diagonals)
+    [1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1],   // 2574-2577 ╴╵╶╷
+    [2, 0, 0, 0], [0, 0, 2, 0], [0, 2, 0, 0], [0, 0, 0, 2],   // 2578-257B ╸╹╺╻
+    [1, 2, 0, 0], [0, 0, 1, 2], [2, 1, 0, 0], [0, 0, 2, 1],   // 257C-257F ╼╽╾╿
+];
+
 class NanoTermV2 {
     constructor(container, sendFn, options = {}) {
         this.container = container;
@@ -945,25 +986,38 @@ class NanoTermV2 {
         const buffer = this.getBuffer();
         const scrollbackVisible = this.scrollbackOffset > 0 && !this.useAlternate;
 
-        let startRow = 0;
+        // Collect all visible rows with their screen positions
+        const visibleRows = [];
 
         if (scrollbackVisible) {
             const scrollbackStart = Math.max(0, this.scrollbackBuffer.length - this.scrollbackOffset);
             const scrollbackRows = Math.min(this.scrollbackOffset, this.rows);
-
             for (let i = 0; i < scrollbackRows; i++) {
-                const scrollbackIdx = scrollbackStart + i;
-                if (scrollbackIdx < this.scrollbackBuffer.length) {
-                    this.renderRow(this.scrollbackBuffer[scrollbackIdx], i);
+                const idx = scrollbackStart + i;
+                if (idx < this.scrollbackBuffer.length) {
+                    visibleRows.push({ row: this.scrollbackBuffer[idx], screenY: i });
                 }
             }
-            startRow = scrollbackRows;
+            const startRow = scrollbackRows;
+            for (let y = 0; y < this.rows - startRow && y + startRow < this.rows; y++) {
+                const row = buffer[y];
+                if (row) visibleRows.push({ row, screenY: startRow + y });
+            }
+        } else {
+            for (let y = 0; y < this.rows; y++) {
+                const row = buffer[y];
+                if (row) visibleRows.push({ row, screenY: y });
+            }
         }
 
-        const rowsToRender = this.rows - startRow;
-        for (let y = 0; y < rowsToRender && y + startRow < this.rows; y++) {
-            const row = buffer[y];
-            if (row) this.renderRow(row, startRow + y);
+        // GLOBAL PASS 1: Draw ALL backgrounds first
+        for (const { row, screenY } of visibleRows) {
+            this.renderRowBg(row, screenY);
+        }
+
+        // GLOBAL PASS 2: Draw ALL text and decorations on top
+        for (const { row, screenY } of visibleRows) {
+            this.renderRowText(row, screenY);
         }
 
         if (this.selection) this.renderSelection();
@@ -972,7 +1026,23 @@ class NanoTermV2 {
         this.ctx.restore();
     }
 
-    renderRow(row, y) {
+    renderRowBg(row, y) {
+        const baseline = y * this.charHeight;
+        let bgStart = 0;
+        let currentBgColor = this.resolveRowBg(row[0], row[0]?.flags ?? 0);
+        for (let col = 0; col <= this.cols; col++) {
+            const cell = row[col];
+            const cellBg = this.resolveRowBg(cell, cell?.flags ?? 0);
+            if (cellBg !== currentBgColor || col === this.cols) {
+                this.ctx.fillStyle = currentBgColor;
+                this.ctx.fillRect(bgStart * this.charWidth, baseline, (col - bgStart) * this.charWidth, this.charHeight);
+                bgStart = col;
+                currentBgColor = cellBg;
+            }
+        }
+    }
+
+    renderRowText(row, y) {
         const baseline = y * this.charHeight;
         let runStart = 0;
         let currentFg = row[0]?.fg ?? 256;
@@ -987,7 +1057,7 @@ class NanoTermV2 {
 
             if (fg !== currentFg || bg !== currentBg || flags !== currentFlags || col === this.cols) {
                 if (col > runStart) {
-                    this.renderRun(row, runStart, col - runStart, baseline, currentFg, currentBg, currentFlags);
+                    this.renderRunText(row, runStart, col - runStart, baseline, currentFg, currentBg, currentFlags);
                 }
                 runStart = col;
                 currentFg = fg;
@@ -997,13 +1067,16 @@ class NanoTermV2 {
         }
     }
 
-    renderRun(row, startX, length, baseline, fg, bg, flags) {
-        // Background
-        if (bg !== 256 || (flags & ATTR.INVERSE)) {
-            const bgColor = (flags & ATTR.INVERSE) ? this.getColor(fg) : this.getColor(bg);
-            this.ctx.fillStyle = bgColor;
-            this.ctx.fillRect(startX * this.charWidth, baseline, length * this.charWidth, this.charHeight);
-        }
+    resolveRowBg(cell, flags) {
+        const fg = cell?.fg ?? 256;
+        const bg = cell?.bg ?? 256;
+        if (flags & ATTR.INVERSE) return this.getColor(fg);
+        if (bg !== 256) return this.getColor(bg);
+        return this.colors.background;
+    }
+
+    renderRunText(row, startX, length, baseline, fg, bg, flags) {
+        // Backgrounds are already drawn in renderRow pass 1
 
         // Collect text
         let text = '';
@@ -1033,6 +1106,9 @@ class NanoTermV2 {
             const ch = row[startX + i]?.char || ' ';
             if (ch === ' ') continue;
             const cx = (startX + i) * this.charWidth;
+            const cp = ch.codePointAt(0);
+            // Programmatic rendering for block elements, box drawing, and braille
+            if (cp >= 0x2500 && this.renderSpecialChar(cp, cx, baseline, textColor)) continue;
             this.ctx.fillText(ch, cx, baseline);
         }
 
@@ -1067,6 +1143,156 @@ class NanoTermV2 {
             this.ctx.lineTo((startX + length) * this.charWidth, baseline + this.charHeight / 2);
             this.ctx.stroke();
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Programmatic Unicode Character Rendering
+    // -------------------------------------------------------------------------
+
+    renderSpecialChar(code, x, y, color) {
+        if (code >= 0x2580 && code <= 0x259F) return this.renderBlockChar(code, x, y, color);
+        if (code >= 0x2500 && code <= 0x257F) return this.renderBoxDrawing(code, x, y, color);
+        if (code >= 0x2800 && code <= 0x28FF) return this.renderBraille(code, x, y, color);
+        return false;
+    }
+
+    renderBlockChar(code, x, y, color) {
+        const w = this.charWidth;
+        const h = this.charHeight;
+        this.ctx.fillStyle = color;
+
+        // Full block U+2588
+        if (code === 0x2588) { this.ctx.fillRect(x, y, w, h); return true; }
+
+        // Upper half block U+2580
+        if (code === 0x2580) { this.ctx.fillRect(x, y, w, Math.ceil(h / 2)); return true; }
+
+        // Lower blocks U+2581-U+2587 (1/8 to 7/8 from bottom)
+        if (code >= 0x2581 && code <= 0x2587) {
+            const frac = (code - 0x2580) / 8;
+            const bh = Math.round(h * frac);
+            this.ctx.fillRect(x, y + h - bh, w, bh);
+            return true;
+        }
+
+        // Left blocks U+2589-U+258F (7/8 to 1/8 from left)
+        if (code >= 0x2589 && code <= 0x258F) {
+            const frac = (0x2590 - code) / 8;
+            this.ctx.fillRect(x, y, Math.round(w * frac), h);
+            return true;
+        }
+
+        // Right half block U+2590
+        if (code === 0x2590) {
+            const hw = Math.floor(w / 2);
+            this.ctx.fillRect(x + hw, y, w - hw, h);
+            return true;
+        }
+
+        // Shade characters U+2591-U+2593
+        if (code >= 0x2591 && code <= 0x2593) {
+            const alpha = [0.25, 0.50, 0.75][code - 0x2591];
+            this.ctx.globalAlpha = alpha;
+            this.ctx.fillRect(x, y, w, h);
+            this.ctx.globalAlpha = 1;
+            return true;
+        }
+
+        // Upper one-eighth block U+2594
+        if (code === 0x2594) { this.ctx.fillRect(x, y, w, Math.max(1, Math.round(h / 8))); return true; }
+
+        // Right one-eighth block U+2595
+        if (code === 0x2595) {
+            const ew = Math.max(1, Math.round(w / 8));
+            this.ctx.fillRect(x + w - ew, y, ew, h);
+            return true;
+        }
+
+        // Quadrant characters U+2596-U+259F
+        if (code >= 0x2596 && code <= 0x259F) {
+            const masks = [
+                0b0010, 0b0001, 0b1000, 0b1011, 0b1001, // 2596-259A
+                0b1110, 0b1101, 0b0100, 0b0110, 0b0111  // 259B-259F
+            ];
+            const mask = masks[code - 0x2596];
+            const hw = Math.ceil(w / 2), hh = Math.ceil(h / 2);
+            if (mask & 8) this.ctx.fillRect(x, y, hw, hh);
+            if (mask & 4) this.ctx.fillRect(x + hw, y, w - hw, hh);
+            if (mask & 2) this.ctx.fillRect(x, y + hh, hw, h - hh);
+            if (mask & 1) this.ctx.fillRect(x + hw, y + hh, w - hw, h - hh);
+            return true;
+        }
+
+        return false;
+    }
+
+    renderBoxDrawing(code, x, y, color) {
+        const idx = code - 0x2500;
+        if (idx < 0 || idx >= BOX_DRAWING_SEGMENTS.length) return false;
+        const seg = BOX_DRAWING_SEGMENTS[idx];
+        if (!seg) return false;
+
+        const [lw, rw, uw, dw] = seg;
+        const w = this.charWidth;
+        const h = this.charHeight;
+        const mx = x + Math.floor(w / 2);
+        const my = y + Math.floor(h / 2);
+        const thin = 1;
+        const thick = Math.max(2, Math.round(w / 5));
+        const gap = Math.max(2, Math.round(Math.min(w, h) * 0.3));
+
+        this.ctx.fillStyle = color;
+
+        const hLine = (x1, x2, cy, wt) => {
+            if (wt === 1) this.ctx.fillRect(x1, cy, x2 - x1, thin);
+            else if (wt === 2) this.ctx.fillRect(x1, cy - Math.floor(thick / 2), x2 - x1, thick);
+            else if (wt === 3) {
+                this.ctx.fillRect(x1, cy - gap, x2 - x1, thin);
+                this.ctx.fillRect(x1, cy + gap, x2 - x1, thin);
+            }
+        };
+        const vLine = (y1, y2, cx, wt) => {
+            if (wt === 1) this.ctx.fillRect(cx, y1, thin, y2 - y1);
+            else if (wt === 2) this.ctx.fillRect(cx - Math.floor(thick / 2), y1, thick, y2 - y1);
+            else if (wt === 3) {
+                this.ctx.fillRect(cx - gap, y1, thin, y2 - y1);
+                this.ctx.fillRect(cx + gap, y1, thin, y2 - y1);
+            }
+        };
+
+        if (lw) hLine(x, mx + thin, my, lw);
+        if (rw) hLine(mx, x + w, my, rw);
+        if (uw) vLine(y, my + thin, mx, uw);
+        if (dw) vLine(my, y + h, mx, dw);
+
+        return true;
+    }
+
+    renderBraille(code, x, y, color) {
+        const bits = code - 0x2800;
+        if (bits === 0) return true; // blank braille
+        const w = this.charWidth;
+        const h = this.charHeight;
+        const dotW = Math.max(1, Math.round(w * 0.2));
+        const dotH = Math.max(1, Math.round(h * 0.1));
+        const cx1 = x + Math.round(w * 0.3);
+        const cx2 = x + Math.round(w * 0.7);
+        const rows = [0.15, 0.35, 0.55, 0.75];
+        // Bit layout: dots 1-8 map to bits 0-7
+        // Col 1: bits 0,1,2,6  Col 2: bits 3,4,5,7
+        const dotMap = [
+            [0, cx1], [1, cx1], [2, cx1], [6, cx1],
+            [3, cx2], [4, cx2], [5, cx2], [7, cx2]
+        ];
+        this.ctx.fillStyle = color;
+        for (let i = 0; i < 8; i++) {
+            const [bit, dx] = dotMap[i];
+            if (bits & (1 << bit)) {
+                const dy = y + Math.round(h * rows[i % 4]);
+                this.ctx.fillRect(dx - Math.floor(dotW / 2), dy - Math.floor(dotH / 2), dotW, dotH);
+            }
+        }
+        return true;
     }
 
     getColor(index) {
