@@ -6,3 +6,4 @@
 .env
 *.log
 qr_code_terminal
+AUDIT.md
