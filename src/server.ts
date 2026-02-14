@@ -29,10 +29,10 @@ const AUTH_TIMEOUT_S = 10;
 /** Seconds to wait for TOTP code entry before disconnecting */
 const TOTP_TIMEOUT_S = 60;
 
-/** Maximum rate limit attempts per minute per IP */
+/** Maximum rate limit attempts per window per IP */
 const RATE_LIMIT_MAX = 5;
 
-/** Rate limit window in milliseconds */
+/** Rate limit sliding window in milliseconds */
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
 /** Maximum terminal dimensions for resize validation */
@@ -54,8 +54,11 @@ const VALID_TAILSCALE_MODES = ['serve', 'funnel'];
 /** Localhost addresses for origin validation */
 const LOCALHOST_ADDRESSES = ['localhost', '127.0.0.1', '::1', '0.0.0.0', '::'];
 
-/** Rate limit tracker: IP -> [timestamp, count] */
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+/** Shells considered safe for PTY spawning */
+const SAFE_SHELLS = ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/sh', '/usr/bin/zsh', '/usr/bin/fish', '/usr/local/bin/bash', '/usr/local/bin/zsh', '/usr/local/bin/fish', 'bash', 'sh', 'zsh', 'fish'];
+
+/** Rate limit tracker: IP -> sliding window of timestamps */
+const rateLimitMap = new Map<string, number[]>();
 
 /** Atomic session counter */
 let activeSessions = 0;
@@ -74,20 +77,27 @@ function isLocalhost(hostname: string): boolean {
     return LOCALHOST_ADDRESSES.includes(hostname.toLowerCase());
 }
 
+/** Sliding window rate limiter — tracks actual timestamps per IP */
 function checkRateLimit(ip: string): boolean {
     const now = Date.now();
-    const entry = rateLimitMap.get(ip);
+    const windowStart = now - RATE_LIMIT_WINDOW_MS;
+    let timestamps = rateLimitMap.get(ip);
 
-    if (!entry || now > entry.resetAt) {
-        rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    if (!timestamps) {
+        rateLimitMap.set(ip, [now]);
         return true;
     }
 
-    if (entry.count >= RATE_LIMIT_MAX) {
+    // Prune timestamps outside the window
+    timestamps = timestamps.filter(t => t > windowStart);
+
+    if (timestamps.length >= RATE_LIMIT_MAX) {
+        rateLimitMap.set(ip, timestamps);
         return false;
     }
 
-    entry.count++;
+    timestamps.push(now);
+    rateLimitMap.set(ip, timestamps);
     return true;
 }
 
@@ -156,10 +166,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
             const url = new URL(req.url);
 
             if (url.pathname === "/ws") {
-                const clientIP = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-                    req.headers.get("x-real-ip") ||
-                    server.requestIP(req)?.address ||
-                    "unknown";
+                const clientIP = server.requestIP(req)?.address || "unknown";
 
                 if (!checkRateLimit(clientIP)) {
                     return new Response("Too many requests", { status: 429 });
@@ -248,7 +255,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
                     sessionData.recvQ.add(async () => {
                         const decoded = await unpackMessage(sessionData, msgBuffer, baseKey, config);
                         if (!decoded) {
-                            ws.close(4003, "Decryption failed");
+                            ws.close(4003, "Authentication failed");
                             return;
                         }
 
@@ -258,7 +265,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
                             if (!valid) {
                                 console.log(`[ShellPort] ❌ Invalid TOTP code from ${sessionData.clientIP}`);
-                                ws.close(4003, "Invalid TOTP code");
+                                ws.close(4003, "Authentication failed");
                                 return;
                             }
 
@@ -291,12 +298,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
                     if (baseKey && sessionData.serverNonce) {
                         if (peekType !== FrameType.CLIENT_NONCE) {
-                            ws.close(4003, "Expected client nonce");
+                            ws.close(4003, "Authentication failed");
                             return;
                         }
 
                         if (msgView.length < 17) { // 1 type byte + 16 nonce bytes
-                            ws.close(4003, "Invalid client nonce");
+                            ws.close(4003, "Authentication failed");
                             return;
                         }
 
@@ -395,7 +402,7 @@ function handleDataMessage(
 
         const decoded = await unpack(sessionKey, msgBuffer);
         if (!decoded) {
-            ws.close(4003, "Decryption failed");
+            ws.close(4003, "Authentication failed");
             return;
         }
 
@@ -431,6 +438,12 @@ function spawnPTY(
     console.log(`[ShellPort] New PTY session allocated for ${sessionData.clientIP || "unknown"}.`);
     try {
         const shell = process.env.SHELL || "bash";
+        if (!SAFE_SHELLS.includes(shell)) {
+            console.error(`[ShellPort] Rejected unsafe shell: ${shell}`);
+            onClose();
+            ws.close(1011, "Unsupported shell");
+            return;
+        }
         const proc = spawn([shell], {
             env,
             terminal: {
