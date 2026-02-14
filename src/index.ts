@@ -11,7 +11,7 @@ import { generateSecret } from "./crypto.js";
 import { generateTOTPSecret, loadTOTPSecret, saveTOTPSecret, deleteTOTPSecret, buildOTPAuthURI } from "./totp.js";
 import { printQR } from "./qr.js";
 
-export const VERSION = "0.3.0";
+export const VERSION = "0.2.0";
 
 export interface ParsedArgs {
     command: string;
