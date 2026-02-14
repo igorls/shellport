@@ -243,7 +243,11 @@ export function saveTOTPSecret(secret: string): void {
  */
 export function loadTOTPSecret(): string | null {
     if (!existsSync(TOTP_KEY_FILE)) return null;
-    return readFileSync(TOTP_KEY_FILE, "utf-8").trim();
+    const secret = readFileSync(TOTP_KEY_FILE, "utf-8").trim();
+    if (secret && process.env.NODE_ENV !== "test" && !process.argv.includes("--quiet") && !process.argv.includes("-q")) {
+        console.log(`[ShellPort] 🔑 Loaded TOTP secret from ${TOTP_KEY_FILE}`);
+    }
+    return secret;
 }
 
 /**

@@ -3,7 +3,7 @@
 // Protocol v2: Per-session salt handshake
 // ═══════════════════════════════════════════════════════════════════════════
 
-let cryptoKey = null;
+let globalSecret = null;
 let sessionCount = 0;
 const activeSessions = new Map();
 let currentSessionId = null;
@@ -15,11 +15,17 @@ const FT_TOTP_RESPONSE = 7;
 const wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
 
 async function init() {
-    const secret = location.hash.substring(1);
+    // Priority: 1. URL fragment, 2. sessionStorage
+    globalSecret = location.hash.substring(1) || sessionStorage.getItem('shellport_secret');
+    
+    if (globalSecret) {
+        sessionStorage.setItem('shellport_secret', globalSecret);
+    }
+
     const status = document.getElementById('enc-status');
 
     if (status) {
-        if (secret) {
+        if (globalSecret) {
             status.innerHTML = '⏳ Negotiating...';
         } else {
             status.innerHTML = '⚠️ No encryption';
@@ -27,7 +33,7 @@ async function init() {
         }
     }
 
-    document.getElementById('new-session').addEventListener('click', createSession);
+    document.getElementById('new-session').addEventListener('click', () => createSession(globalSecret));
 
     // Context menu actions
     document.getElementById('context-menu').addEventListener('click', e => {
@@ -58,7 +64,7 @@ async function init() {
         }
     });
 
-    createSession();
+    createSession(globalSecret);
 }
 
 function switchSession(id) {
@@ -78,10 +84,9 @@ function switchSession(id) {
     updateStatusBar(id);
 }
 
-function createSession() {
+function createSession(secret) {
     sessionCount++;
     const id = 'session-' + Date.now();
-    const secret = location.hash.substring(1);
 
     // Create sidebar item
     const li = document.createElement('li');
