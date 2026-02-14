@@ -10,7 +10,7 @@
  * - Atomic session counting
  * - Rate limiting per IP
  * - Bounds validation on all control messages
- * - Interactive connection approval mode
+ * - TOTP 2FA authentication (RFC 6238)
  */
 
 import { spawn, spawnSync } from "bun";
@@ -18,6 +18,7 @@ import { deriveKey, pack, unpack, getCryptoJS, generateNonce, deriveSessionSalt,
 import { SeqQueue, FrameType } from "./types.js";
 import type { ServerConfig, SessionData } from "./types.js";
 import { buildHTML } from "./frontend/build.js";
+import { verifyTOTP } from "./totp.js";
 
 /** Maximum concurrent PTY sessions */
 const MAX_SESSIONS = 10;
@@ -25,8 +26,8 @@ const MAX_SESSIONS = 10;
 /** Seconds to wait for a valid auth frame before disconnecting */
 const AUTH_TIMEOUT_S = 10;
 
-/** Seconds to wait for approval before disconnecting */
-const APPROVAL_TIMEOUT_S = 30;
+/** Seconds to wait for TOTP code entry before disconnecting */
+const TOTP_TIMEOUT_S = 60;
 
 /** Maximum rate limit attempts per minute per IP */
 const RATE_LIMIT_MAX = 5;
@@ -76,16 +77,16 @@ function isLocalhost(hostname: string): boolean {
 function checkRateLimit(ip: string): boolean {
     const now = Date.now();
     const entry = rateLimitMap.get(ip);
-    
+
     if (!entry || now > entry.resetAt) {
         rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
         return true;
     }
-    
+
     if (entry.count >= RATE_LIMIT_MAX) {
         return false;
     }
-    
+
     entry.count++;
     return true;
 }
@@ -108,42 +109,15 @@ const SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
 };
 
-function getApprovalFromTerminal(clientIP: string): Promise<boolean> {
-    return new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-            console.log("[ShellPort] Approval timeout - denied");
-            process.stdin.setRawMode(false);
-            process.stdin.pause();
-            resolve(false);
-        }, APPROVAL_TIMEOUT_S * 1000);
-
-        process.stdin.setRawMode(true);
-        process.stdin.resume();
-        
-        process.stdout.write(`[ShellPort] 🔔 Incoming connection from ${clientIP}. Approve? [y/N] `);
-        
-        const onData = (data: Buffer) => {
-            clearTimeout(timeout);
-            process.stdin.setRawMode(false);
-            process.stdin.pause();
-            process.stdin.removeListener('data', onData);
-            
-            const answer = data.toString().toLowerCase().trim();
-            const approved = answer === 'y' || answer === 'yes';
-            resolve(approved);
-        };
-        
-        process.stdin.once('data', onData);
-    });
-}
-
 export async function startServer(config: ServerConfig): Promise<void> {
     const baseKey = config.secret ? await deriveKey(config.secret) : null;
     const safeEnv = buildSafeEnv();
 
     console.log(`[ShellPort] Starting PTY WebSocket Server on port ${config.port}...`);
 
-    if (config.requireApproval && process.env.SHELLPORT_APPROVAL_MODE !== "disabled") {
+    if (config.totp && config.totpSecret) {
+        console.log("[ShellPort] 🔐 TOTP 2FA enabled (connections require authenticator code)");
+    } else if (config.requireApproval && process.env.SHELLPORT_APPROVAL_MODE !== "disabled") {
         console.log("[ShellPort] 🔐 Interactive approval mode enabled (connections require manual approval)");
     }
 
@@ -183,9 +157,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
             if (url.pathname === "/ws") {
                 const clientIP = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-                                 req.headers.get("x-real-ip") ||
-                                 server.requestIP(req)?.address ||
-                                 "unknown";
+                    req.headers.get("x-real-ip") ||
+                    server.requestIP(req)?.address ||
+                    "unknown";
 
                 if (!checkRateLimit(clientIP)) {
                     return new Response("Too many requests", { status: 429 });
@@ -200,7 +174,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
                     try {
                         const originUrl = new URL(origin);
                         const serverHost = req.headers.get("host")?.split(":")[0] || "";
-                        
+
                         if (originUrl.hostname !== serverHost) {
                             if (!config.allowLocalhost || !isLocalhost(originUrl.hostname)) {
                                 return new Response("Origin not allowed", { status: 403 });
@@ -220,7 +194,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
                     authenticated: false,
                     clientIP,
                 };
-                
+
                 if (server.upgrade(req, { data: data as unknown as undefined, headers: { "Sec-WebSocket-Protocol": `shellport-v${PROTOCOL_VERSION}` } })) {
                     return;
                 }
@@ -243,102 +217,138 @@ export async function startServer(config: ServerConfig): Promise<void> {
                 if (baseKey) {
                     sessionData.serverNonce = generateNonce();
                     ws.send(sessionData.serverNonce.buffer as ArrayBuffer);
-                } else if (!config.requireApproval) {
+                } else if (!config.totp && !config.requireApproval) {
+                    // No encryption, no TOTP, no approval — plaintext mode
                     sessionData.authenticated = true;
                     incrementSessions();
                     spawnPTY(ws, sessionData, null, safeEnv, () => decrementSessions());
                     return;
+                } else if (!baseKey && config.totp && config.totpSecret) {
+                    // No encryption, but TOTP required — send challenge immediately
+                    sessionData.authenticated = true;
+                    sessionData.totpPending = true;
+                    // Send TOTP challenge as plaintext frame: [type_byte]
+                    const frame = new Uint8Array([FrameType.TOTP_CHALLENGE]);
+                    ws.send(frame.buffer as ArrayBuffer);
+                    console.log(`[ShellPort] 🔑 TOTP challenge sent to ${sessionData.clientIP}`);
                 }
 
                 sessionData.authTimer = setTimeout(() => {
                     console.log("[ShellPort] Auth/approval timeout — disconnecting.");
                     ws.close(4001, "Authentication timeout");
-                }, AUTH_TIMEOUT_S * 1000);
+                }, (config.totp ? TOTP_TIMEOUT_S : AUTH_TIMEOUT_S) * 1000);
             },
 
             async message(ws, message) {
                 const sessionData = ws.data as unknown as SessionData;
                 const msgBuffer = message as unknown as ArrayBuffer;
 
-                if (!sessionData.authenticated) {
+                // ─── TOTP verification pending ───
+                if (sessionData.totpPending && config.totp && config.totpSecret) {
                     sessionData.recvQ.add(async () => {
-                        if (sessionData.authenticated) {
-                            handleDataMessage(ws, sessionData, msgBuffer, baseKey, config);
+                        const decoded = await unpackMessage(sessionData, msgBuffer, baseKey, config);
+                        if (!decoded) {
+                            ws.close(4003, "Decryption failed");
                             return;
                         }
 
-                        const msgView = new Uint8Array(msgBuffer);
-                        const peekType = msgView.length > 0 ? msgView[0] : 0;
+                        if (decoded.type === FrameType.TOTP_RESPONSE) {
+                            const code = new TextDecoder().decode(decoded.payload).trim();
+                            const valid = await verifyTOTP(config.totpSecret!, code);
 
-                        if (baseKey && sessionData.serverNonce) {
-                            if (peekType !== FrameType.CLIENT_NONCE) {
-                                ws.close(4003, "Expected client nonce");
+                            if (!valid) {
+                                console.log(`[ShellPort] ❌ Invalid TOTP code from ${sessionData.clientIP}`);
+                                ws.close(4003, "Invalid TOTP code");
                                 return;
                             }
 
-                            if (msgView.length < 16) {
-                                ws.close(4003, "Invalid client nonce");
-                                return;
-                            }
-
-                            const clientNonce = msgView.slice(0, 16);
-
-                            if (config.requireApproval && process.env.SHELLPORT_APPROVAL_MODE !== "disabled") {
-                                console.log(`[ShellPort] 🔔 Connection request from: ${sessionData.clientIP}`);
-                                
-                                const approved = await getApprovalFromTerminal(sessionData.clientIP || "unknown");
-                                
-                                if (!approved) {
-                                    console.log(`[ShellPort] ❌ Connection from ${sessionData.clientIP} denied`);
-                                    ws.close(4003, "Connection denied by host");
-                                    return;
-                                }
-                                console.log(`[ShellPort] ✅ Connection from ${sessionData.clientIP} approved`);
-                            }
-
-                            const sessionSalt = await deriveSessionSalt(sessionData.serverNonce!, clientNonce);
-                            const sessionKey = await deriveKey(config.secret, sessionSalt);
-
-                            (sessionData as any)._sessionKey = sessionKey;
-                            sessionData.serverNonce = undefined;
-                            sessionData.authenticated = true;
-
+                            console.log(`[ShellPort] ✅ TOTP verified for ${sessionData.clientIP}`);
+                            sessionData.totpPending = false;
                             if (sessionData.authTimer) clearTimeout(sessionData.authTimer);
                             incrementSessions();
+                            const sessionKey = (sessionData as any)._sessionKey || null;
                             spawnPTY(ws, sessionData, sessionKey, safeEnv, () => decrementSessions());
-                            return;
                         }
-
-                        if (!baseKey && config.requireApproval && process.env.SHELLPORT_APPROVAL_MODE !== "disabled") {
-                            console.log(`[ShellPort] 🔔 Connection request from: ${sessionData.clientIP}`);
-                            const approved = await getApprovalFromTerminal(sessionData.clientIP || "unknown");
-                            if (!approved) {
-                                console.log(`[ShellPort] ❌ Connection from ${sessionData.clientIP} denied`);
-                                ws.close(4003, "Connection denied by host");
-                                return;
-                            }
-                            console.log(`[ShellPort] ✅ Connection from ${sessionData.clientIP} approved`);
-                        }
-
-                        sessionData.authenticated = true;
-                        if (sessionData.authTimer) clearTimeout(sessionData.authTimer);
-                        incrementSessions();
-                        spawnPTY(ws, sessionData, null, safeEnv, () => decrementSessions());
                     });
                     return;
                 }
 
-                handleDataMessage(ws, sessionData, msgBuffer, baseKey, config);
+                // ─── Normal authenticated traffic ───
+                if (sessionData.authenticated) {
+                    handleDataMessage(ws, sessionData, msgBuffer, baseKey, config);
+                    return;
+                }
+
+                // ─── Authentication handshake ───
+                sessionData.recvQ.add(async () => {
+                    if (sessionData.authenticated) {
+                        handleDataMessage(ws, sessionData, msgBuffer, baseKey, config);
+                        return;
+                    }
+
+                    const msgView = new Uint8Array(msgBuffer);
+                    const peekType = msgView.length > 0 ? msgView[0] : 0;
+
+                    if (baseKey && sessionData.serverNonce) {
+                        if (peekType !== FrameType.CLIENT_NONCE) {
+                            ws.close(4003, "Expected client nonce");
+                            return;
+                        }
+
+                        if (msgView.length < 17) { // 1 type byte + 16 nonce bytes
+                            ws.close(4003, "Invalid client nonce");
+                            return;
+                        }
+
+                        // Skip the frame type byte (byte 0) to get the actual nonce payload
+                        const clientNonce = msgView.slice(1, 17);
+                        const sessionSalt = await deriveSessionSalt(sessionData.serverNonce!, clientNonce);
+                        const sessionKey = await deriveKey(config.secret, sessionSalt);
+
+                        (sessionData as any)._sessionKey = sessionKey;
+                        sessionData.serverNonce = undefined;
+                        sessionData.authenticated = true;
+
+                        // If TOTP is enabled, send challenge instead of spawning PTY
+                        if (config.totp && config.totpSecret) {
+                            sessionData.totpPending = true;
+                            // Send TOTP challenge (encrypted)
+                            ws.send(await pack(sessionKey, FrameType.TOTP_CHALLENGE, new Uint8Array(0)));
+                            console.log(`[ShellPort] 🔑 TOTP challenge sent to ${sessionData.clientIP}`);
+                            return;
+                        }
+
+                        if (sessionData.authTimer) clearTimeout(sessionData.authTimer);
+                        incrementSessions();
+                        spawnPTY(ws, sessionData, sessionKey, safeEnv, () => decrementSessions());
+                        return;
+                    }
+
+                    // No encryption — handle plaintext with optional TOTP
+                    sessionData.authenticated = true;
+                    if (sessionData.authTimer) clearTimeout(sessionData.authTimer);
+
+                    if (config.totp && config.totpSecret) {
+                        sessionData.totpPending = true;
+                        // Send TOTP challenge (plaintext)
+                        ws.send(await pack(null, FrameType.TOTP_CHALLENGE, new Uint8Array(0)));
+                        console.log(`[ShellPort] 🔑 TOTP challenge sent to ${sessionData.clientIP}`);
+                        return;
+                    }
+
+                    incrementSessions();
+                    spawnPTY(ws, sessionData, null, safeEnv, () => decrementSessions());
+                });
             },
 
-            close(ws) {
+            close(ws, code, reason) {
                 const sessionData = ws.data as unknown as SessionData;
                 if (sessionData.authTimer) clearTimeout(sessionData.authTimer);
-                
-                if (sessionData.authenticated) {
+
+                if (sessionData.authenticated && !sessionData.totpPending) {
                     decrementSessions();
                 }
-                
+
                 const proc = sessionData.proc;
                 if (proc && !proc.killed) {
                     try {
@@ -357,6 +367,19 @@ export async function startServer(config: ServerConfig): Promise<void> {
     console.log(`[ShellPort] 🔒 Protocol version: v${PROTOCOL_VERSION}`);
 }
 
+/**
+ * Helper to unpack a message in either encrypted or plaintext mode.
+ */
+async function unpackMessage(
+    sessionData: SessionData,
+    msgBuffer: ArrayBuffer,
+    baseKey: CryptoKey | null,
+    _config: ServerConfig
+) {
+    const sessionKey = (sessionData as any)._sessionKey || baseKey;
+    return await unpack(sessionKey, msgBuffer);
+}
+
 function handleDataMessage(
     ws: any,
     sessionData: SessionData,
@@ -365,7 +388,7 @@ function handleDataMessage(
     config: ServerConfig
 ) {
     const sessionKey = (sessionData as any)._sessionKey || baseKey;
-    
+
     sessionData.recvQ.add(async () => {
         const proc = sessionData.proc;
         if (!proc || !proc.terminal) return;
@@ -375,16 +398,16 @@ function handleDataMessage(
             ws.close(4003, "Decryption failed");
             return;
         }
-        
+
         if (decoded.type === FrameType.DATA) {
             sessionData.proc?.terminal?.write(decoded.payload);
         } else if (decoded.type === FrameType.CONTROL) {
             try {
                 const payloadStr = new TextDecoder().decode(decoded.payload);
                 if (payloadStr.length > 65536) return;
-                
+
                 const ctl = JSON.parse(payloadStr);
-                
+
                 if (ctl.type === "resize") {
                     const cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(Number(ctl.cols)) || 80));
                     const rows = Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(Number(ctl.rows)) || 24));

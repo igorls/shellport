@@ -16,6 +16,10 @@ export const FrameType = {
     APPROVAL_REQUEST: 4,
     /** Approval response (client -> server) */
     APPROVAL_RESPONSE: 5,
+    /** TOTP challenge sent by server */
+    TOTP_CHALLENGE: 6,
+    /** TOTP response sent by client (6-digit code) */
+    TOTP_RESPONSE: 7,
 } as const;
 
 export type FrameTypeValue = (typeof FrameType)[keyof typeof FrameType];
@@ -44,10 +48,14 @@ export interface ServerConfig {
     port: number;
     secret: string;
     tailscale: string;
-    /** Require interactive approval for new connections */
+    /** Require interactive approval for new connections (legacy) */
     requireApproval: boolean;
     /** Allow localhost origin bypass (dev mode) */
     allowLocalhost: boolean;
+    /** Enable TOTP 2FA (default: true) */
+    totp: boolean;
+    /** TOTP secret (Base32 encoded) */
+    totpSecret?: string;
 }
 
 /** Client configuration */
@@ -73,6 +81,8 @@ export interface SessionData {
     approvalResolve?: (approved: boolean) => void;
     /** Timer for approval timeout */
     approvalTimer?: ReturnType<typeof setTimeout>;
+    /** Whether TOTP verification is pending */
+    totpPending?: boolean;
 }
 
 /** Sequential async queue for ordered message handling */

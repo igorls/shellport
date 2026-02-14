@@ -247,3 +247,107 @@ button.btn:active { background: #1a1a1a; }
 .term-canvas-container:focus-within + .scrollbar .scrollbar-thumb {
   opacity: 1;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TOTP Modal
+   ═══════════════════════════════════════════════════════════════════════ */
+.totp-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: fadeIn 0.2s ease;
+}
+
+.totp-overlay.fade-out {
+  animation: fadeOut 0.3s ease forwards;
+}
+
+.totp-modal {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 16px;
+  padding: 36px 40px;
+  text-align: center;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6), 0 0 40px rgba(167, 139, 250, 0.08);
+  max-width: 380px;
+  width: 90%;
+}
+
+.totp-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+}
+
+.totp-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #e0e0e0;
+  margin-bottom: 6px;
+}
+
+.totp-subtitle {
+  font-size: 13px;
+  color: #888;
+  margin-bottom: 24px;
+  line-height: 1.4;
+}
+
+.totp-input {
+  width: 100%;
+  padding: 14px;
+  font-size: 32px;
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+  text-align: center;
+  letter-spacing: 12px;
+  background: #111;
+  border: 2px solid #333;
+  border-radius: 10px;
+  color: #e0e0e0;
+  outline: none;
+  transition: border-color 0.2s;
+  caret-color: #a78bfa;
+}
+
+.totp-input:focus {
+  border-color: #a78bfa;
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.15);
+}
+
+.totp-input::placeholder {
+  color: #333;
+  letter-spacing: 12px;
+}
+
+.totp-error {
+  font-size: 13px;
+  color: #ef4444;
+  margin-top: 12px;
+  min-height: 18px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.totp-error.visible {
+  opacity: 1;
+}
+
+.totp-hint {
+  font-size: 11px;
+  color: #555;
+  margin-top: 16px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}

@@ -8,12 +8,16 @@ let sessionCount = 0;
 const activeSessions = new Map();
 let currentSessionId = null;
 
+// TOTP frame types (must match server)
+const FT_TOTP_CHALLENGE = 6;
+const FT_TOTP_RESPONSE = 7;
+
 const wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
 
 async function init() {
     const secret = location.hash.substring(1);
     const status = document.getElementById('enc-status');
-    
+
     if (status) {
         if (secret) {
             status.innerHTML = '⏳ Negotiating...';
@@ -113,7 +117,7 @@ function createSession() {
     document.getElementById('main').appendChild(container);
 
     // WebSocket
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl, ['shellport-v2']);
     ws.binaryType = 'arraybuffer';
     const sendQ = new SeqQueue();
     const recvQ = new SeqQueue();
@@ -125,10 +129,11 @@ function createSession() {
 
     const sendMsg = (type, payload) => sendQ.add(async () => {
         if (ws.readyState === 1) {
-            if (type === 2) { // CLIENT_NONCE - sent unencrypted
-                ws.send(await pack(null, type, payload));
-            } else if (sessionKey) {
+            if (sessionKey) {
                 ws.send(await pack(sessionKey, type, payload));
+            } else {
+                // Plaintext mode (no secret / pre-handshake)
+                ws.send(await pack(null, type, payload));
             }
         }
     });
@@ -156,47 +161,68 @@ function createSession() {
         return confirm('Allow remote clipboard write?\n\nContent length: ' + text.length + ' characters');
     };
 
+    let totpPending = false;
+
     ws.onopen = () => {
         term.write('\x1b[90mConnecting...\x1b[0m\r\n');
     };
 
     ws.onmessage = async e => {
         const data = e.data;
-        
+
         // Protocol v2: First message from server is the nonce
         if (!serverNonce && secret) {
             serverNonce = new Uint8Array(data);
             clientNonce = generateNonce();
-            
+
             // Send client nonce
-            sendMsg(2, clientNonce);  // FrameType.CLIENT_NONCE
-            
+            sendMsg(3, clientNonce);  // FrameType.CLIENT_NONCE = 3
+
             // Derive per-session key
             const sessionSalt = await deriveSessionSalt(serverNonce, clientNonce);
             sessionKey = await deriveKey(secret, sessionSalt);
-            
-            const statusEl = li.querySelector('.session-status');
-            if (statusEl) {
-                statusEl.classList.remove('pending');
-                statusEl.classList.add('running');
-            }
-            
+
             const encStatus = document.getElementById('enc-status');
             if (encStatus) {
                 encStatus.innerHTML = '🔒 AES-256-GCM';
                 encStatus.classList.add('secure');
             }
-            
-            term.write('\x1b[2K\x1b[G');  // Clear "Connecting..." line
-            term.resize();
-            term.canvas.focus();
-            handshakeComplete = true;
+
+            // Don't complete handshake yet — wait for potential TOTP challenge
             history.replaceState(null, '', location.pathname);
             return;
         }
-        
-        // Plaintext mode
-        if (!secret && !handshakeComplete) {
+
+        // Check for TOTP challenge (can arrive after nonce exchange or in plaintext mode)
+        if (!handshakeComplete) {
+            const decoded = await unpack(sessionKey || await (secret ? deriveKey(secret) : Promise.resolve(null)), data);
+            if (decoded && decoded.type === FT_TOTP_CHALLENGE) {
+                totpPending = true;
+                term.write('\x1b[2K\x1b[G');
+                term.write('\x1b[93m🔐 TOTP verification required\x1b[0m\r\n');
+                showTOTPModal(code => {
+                    const payload = new TextEncoder().encode(code);
+                    sendMsg(FT_TOTP_RESPONSE, payload);
+                });
+                return;
+            }
+
+            // If not a TOTP challenge, it's either data or plaintext start
+            if (!serverNonce && !secret && !totpPending) {
+                // Plaintext mode — check if this is a TOTP challenge in plaintext
+                const plainView = new Uint8Array(data);
+                if (plainView.length >= 1 && plainView[0] === FT_TOTP_CHALLENGE) {
+                    totpPending = true;
+                    term.write('\x1b[2K\x1b[G');
+                    term.write('\x1b[93m🔐 TOTP verification required\x1b[0m\r\n');
+                    showTOTPModal(code => {
+                        sendMsg(FT_TOTP_RESPONSE, new TextEncoder().encode(code));
+                    });
+                    return;
+                }
+            }
+
+            // Normal connection established (no TOTP required)
             handshakeComplete = true;
             const statusEl = li.querySelector('.session-status');
             if (statusEl) {
@@ -206,6 +232,11 @@ function createSession() {
             term.write('\x1b[2K\x1b[G');
             term.resize();
             term.canvas.focus();
+
+            // Fall through to handle this message as data
+            if (decoded && decoded.type === 0) {
+                term.write(decoded.payload);
+            }
             return;
         }
 
@@ -213,6 +244,20 @@ function createSession() {
         recvQ.add(async () => {
             const decoded = await unpack(sessionKey || await deriveKey(secret), data);
             if (decoded && decoded.type === 0) {
+                // If TOTP was pending and we got data, it means we're approved!
+                if (totpPending) {
+                    totpPending = false;
+                    handshakeComplete = true;
+                    removeTOTPModal();
+                    const statusEl = li.querySelector('.session-status');
+                    if (statusEl) {
+                        statusEl.classList.remove('pending');
+                        statusEl.classList.add('running');
+                    }
+                    term.write('\x1b[2K\x1b[G');
+                    term.resize();
+                    term.canvas.focus();
+                }
                 term.write(decoded.payload);
             }
         });
@@ -224,15 +269,29 @@ function createSession() {
             statusEl.classList.remove('pending', 'running');
             statusEl.classList.add('exited');
         }
-        
+
         let reason = 'Disconnected';
         if (e.code === 4001) reason = 'Authentication timeout';
-        else if (e.code === 4003) reason = e.reason || 'Access denied';
-        else if (e.code === 1000) reason = 'Session ended';
+        else if (e.code === 4003) {
+            reason = e.reason || 'Access denied';
+            // Show error in TOTP modal if it's still up
+            if (totpPending) {
+                if (e.reason === 'Invalid TOTP code') {
+                    showTOTPError('Invalid code. Please try again.');
+                    // Reconnect for retry
+                    return;
+                }
+                removeTOTPModal();
+            }
+        }
+        else if (e.code === 1000) {
+            reason = 'Session ended';
+            removeTOTPModal();
+        }
         else if (e.code === 1011) reason = 'Server error';
-        
+
         term.write(`\r\n\x1b[31m[${reason}]\x1b[0m\r\n`);
-        
+
         if (!handshakeComplete) {
             const encStatus = document.getElementById('enc-status');
             if (encStatus) {
@@ -280,6 +339,76 @@ function updateStatusBar(id) {
     const rows = session.term.rows;
     const colsEl = session.statusbar.querySelector('.cols');
     if (colsEl) colsEl.textContent = `${cols}×${rows}`;
+}
+
+function showTOTPModal(onSubmit) {
+    // Remove any existing modal
+    const existing = document.getElementById('totp-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'totp-overlay';
+    overlay.className = 'totp-overlay';
+    overlay.innerHTML = `
+        <div class="totp-modal">
+            <div class="totp-icon">🔐</div>
+            <div class="totp-title">Two-Factor Authentication</div>
+            <div class="totp-subtitle">Enter the 6-digit code from your authenticator app</div>
+            <input type="text" class="totp-input" id="totp-code" maxlength="6" 
+                   inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"
+                   placeholder="000000">
+            <div class="totp-error" id="totp-error"></div>
+            <div class="totp-hint">Using Google Authenticator, Authy, or 1Password</div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const input = document.getElementById('totp-code');
+    requestAnimationFrame(() => input.focus());
+
+    input.addEventListener('input', e => {
+        // Only allow digits
+        e.target.value = e.target.value.replace(/[^0-9]/g, '');
+
+        if (e.target.value.length === 6) {
+            const code = e.target.value;
+            input.disabled = true;
+            input.style.opacity = '0.5';
+            onSubmit(code);
+        }
+    });
+
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && input.value.length === 6) {
+            input.disabled = true;
+            input.style.opacity = '0.5';
+            onSubmit(input.value);
+        }
+    });
+}
+
+function removeTOTPModal() {
+    const overlay = document.getElementById('totp-overlay');
+    if (overlay) {
+        overlay.classList.add('fade-out');
+        setTimeout(() => overlay.remove(), 300);
+    }
+}
+
+function showTOTPError(message) {
+    const errorEl = document.getElementById('totp-error');
+    if (errorEl) {
+        errorEl.textContent = message;
+        errorEl.classList.add('visible');
+    }
+    const input = document.getElementById('totp-code');
+    if (input) {
+        input.disabled = false;
+        input.style.opacity = '1';
+        input.value = '';
+        input.focus();
+    }
 }
 
 init();

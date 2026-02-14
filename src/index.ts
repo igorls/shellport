@@ -8,8 +8,10 @@
 import { startServer } from "./server.js";
 import { connectClient } from "./client.js";
 import { generateSecret } from "./crypto.js";
+import { generateTOTPSecret, loadTOTPSecret, saveTOTPSecret, deleteTOTPSecret, buildOTPAuthURI } from "./totp.js";
+import { printQR } from "./qr.js";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 export interface ParsedArgs {
     command: string;
@@ -21,6 +23,8 @@ export interface ParsedArgs {
     requireApproval: boolean;
     allowLocalhost: boolean;
     quiet: boolean;
+    totp: boolean;
+    totpReset: boolean;
 }
 
 /** Parse CLI arguments into a structured object. */
@@ -34,6 +38,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     let requireApproval = true;
     let allowLocalhost = false;
     let quiet = false;
+    let totp = true;
+    let totpReset = false;
 
     for (let i = 1; i < argv.length; i++) {
         if (argv[i] === "--port" || argv[i] === "-p") {
@@ -46,6 +52,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
             tailscale = argv[++i];
         } else if (argv[i] === "--no-approval") {
             requireApproval = false;
+        } else if (argv[i] === "--no-totp") {
+            totp = false;
+        } else if (argv[i] === "--totp-reset") {
+            totpReset = true;
         } else if (argv[i] === "--allow-localhost" || argv[i] === "--dev") {
             allowLocalhost = true;
         } else if (argv[i] === "--quiet" || argv[i] === "-q") {
@@ -55,7 +65,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
         }
     }
 
-    return { command, port, secret, tailscale, url, noSecret, requireApproval, allowLocalhost, quiet };
+    return { command, port, secret, tailscale, url, noSecret, requireApproval, allowLocalhost, quiet, totp, totpReset };
 }
 
 const parsed = parseArgs(process.argv.slice(2));
@@ -68,6 +78,7 @@ if (parsed.command === "server" || parsed.command === "serve") {
         secret = generateSecret();
         if (!parsed.quiet) {
             console.log(`[ShellPort] 🎲 Auto-generated session secret (not persisted)`);
+            console.log(`[ShellPort] 🌐 Open in browser: http://localhost:${parsed.port}/#${secret}`);
         }
     }
 
@@ -75,12 +86,54 @@ if (parsed.command === "server" || parsed.command === "serve") {
         console.log(`[ShellPort] ⚠️  Using fixed secret. Auto-generated secrets (the default) are recommended for better security.`);
     }
 
-    startServer({ 
-        port: parsed.port, 
-        secret, 
+    // ─── TOTP Setup ───
+    let totpSecret: string | undefined;
+
+    if (parsed.totp) {
+        // Handle --totp-reset
+        if (parsed.totpReset) {
+            deleteTOTPSecret();
+            console.log("[ShellPort] 🔄 TOTP secret reset. A new pairing will be generated.");
+        }
+
+        // Load or generate TOTP secret
+        const existing = loadTOTPSecret();
+        if (existing) {
+            totpSecret = existing;
+            if (!parsed.quiet) {
+                console.log("[ShellPort] 🔐 TOTP 2FA active (already paired)");
+            }
+        } else {
+            totpSecret = generateTOTPSecret();
+            saveTOTPSecret(totpSecret);
+
+            if (!parsed.quiet) {
+                console.log("");
+                console.log("  ┌─────────────────────────────────────────────────────┐");
+                console.log("  │   🔐 TOTP 2FA Setup — Scan with Authenticator App   │");
+                console.log("  └─────────────────────────────────────────────────────┘");
+
+                const uri = buildOTPAuthURI(totpSecret);
+                printQR(uri);
+
+                console.log(`  Manual entry key: ${totpSecret}`);
+                console.log(`  Algorithm: SHA1 | Digits: 6 | Period: 30s`);
+                console.log("");
+                console.log("  After pairing, this QR code won't be shown again.");
+                console.log("  Use --totp-reset to generate a new secret.");
+                console.log("");
+            }
+        }
+    }
+
+    startServer({
+        port: parsed.port,
+        secret,
         tailscale: parsed.tailscale,
         requireApproval: parsed.requireApproval,
         allowLocalhost: parsed.allowLocalhost,
+        totp: parsed.totp,
+        totpSecret,
     });
 } else if (parsed.command === "client" || parsed.command === "connect") {
     connectClient({ url: parsed.url, secret: parsed.secret });
@@ -102,7 +155,9 @@ if (parsed.command === "server" || parsed.command === "serve") {
     --port, -p <n>           Port (default: 7681)
     --secret, -s <key>       Fixed encryption secret (auto-generated if omitted)
     --no-secret              Disable encryption entirely (plaintext mode)
-    --no-approval            Disable interactive connection approval
+    --no-totp                Disable TOTP 2FA authentication
+    --totp-reset             Regenerate TOTP secret (re-pair authenticator)
+    --no-approval            Disable interactive connection approval (legacy)
     --allow-localhost, --dev Allow localhost origin bypass (dev mode)
     --tailscale <serve|funnel>  Tailscale integration
     --quiet, -q              Suppress non-essential output
@@ -111,28 +166,29 @@ if (parsed.command === "server" || parsed.command === "serve") {
     SHELLPORT_SECRET         Fixed encryption secret (avoids exposing in ps)
 
   Security:
-    By default, connections require interactive approval from the server host.
-    Use --no-approval to disable this (not recommended for public networks).
+    By default, connections require TOTP 2FA from an authenticator app.
+    On first launch, a QR code is displayed for pairing with Authy, Google
+    Authenticator, 1Password, etc. The secret is persisted in ~/.shellport/
 
     Per-session cryptographic salts prevent precomputation attacks.
     Origin header validation is strict by default. Use --allow-localhost
     for local development.
 
   Examples:
-    # Start with full security (recommended)
+    # Start with full security — TOTP + auto-generated encryption (recommended)
     shellport server
 
-    # Start with auto-approval (trusted networks only)
-    shellport server --no-approval
+    # Start without TOTP (encryption only)
+    shellport server --no-totp
+
+    # Re-pair authenticator app
+    shellport server --totp-reset
 
     # Dev mode with localhost bypass
     shellport server --dev
 
-    # Start with a fixed secret
-    shellport server --secret your-secret-here
-
     # Plaintext mode (trusted network only)
-    shellport server --no-secret
+    shellport server --no-secret --no-totp
 
     # Public via Tailscale Funnel
     shellport server --tailscale funnel
