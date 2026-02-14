@@ -155,6 +155,18 @@ export async function generateTOTP(
 }
 
 /**
+ * Constant-time comparison of two strings to prevent timing attacks.
+ */
+function timingSafeEqual(a: string, b: string): boolean {
+    if (a.length !== b.length) return false;
+    let result = 0;
+    for (let i = 0; i < a.length; i++) {
+        result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    return result === 0;
+}
+
+/**
  * Verify a TOTP code against the current time ± 1 window.
  * This allows for 30 seconds of clock skew in either direction.
  *
@@ -164,17 +176,20 @@ export async function generateTOTP(
  */
 export async function verifyTOTP(secret: string, code: string): Promise<boolean> {
     const now = Math.floor(Date.now() / 1000);
+    const paddedCode = code.padStart(TOTP_DIGITS, "0");
+
+    let isValid = false;
 
     // Check current window and ±1 window (allows 30s clock skew)
     for (const offset of [-1, 0, 1]) {
         const time = now + offset * TOTP_PERIOD;
         const expected = await generateTOTP(secret, time);
-        if (expected === code.padStart(TOTP_DIGITS, "0")) {
-            return true;
+        if (timingSafeEqual(expected, paddedCode)) {
+            isValid = true;
         }
     }
 
-    return false;
+    return isValid;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

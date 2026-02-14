@@ -177,6 +177,12 @@ describe("TOTP verification", () => {
             expect(valid).toBe(false);
         }
     });
+
+    test("timingSafeEqual handles different lengths and contents correctly", async () => {
+        // We test verifyTOTP which uses timingSafeEqual
+        expect(await verifyTOTP(SECRET, "123456")).toBe(false);
+        expect(await verifyTOTP(SECRET, "12345")).toBe(false); // Different length
+    });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

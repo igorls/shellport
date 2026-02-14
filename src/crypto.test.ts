@@ -6,8 +6,35 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { deriveKey, pack, unpack, getCryptoJS, generateNonce, generateSecret, deriveSessionSalt, PROTOCOL_VERSION } from "./crypto.js";
+import { deriveKey, pack, unpack, getCryptoJS, generateNonce, generateSecret, deriveSessionSalt, PROTOCOL_VERSION, PBKDF2_ITERATIONS, NONCE_LENGTH } from "./crypto.js";
 import { FrameType } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// Security Audit Tests
+// ---------------------------------------------------------------------------
+describe("Security Audit", () => {
+    test("PBKDF2 iteration count is at least 100,000", () => {
+        expect(PBKDF2_ITERATIONS).toBeGreaterThanOrEqual(100000);
+    });
+
+    test("nonce length is at least 16 bytes (128 bits)", () => {
+        expect(NONCE_LENGTH).toBeGreaterThanOrEqual(16);
+    });
+
+    test("AES-GCM IVs are unique for every pack() call", async () => {
+        const key = await deriveKey("test-iv-uniqueness");
+        const ivs = new Set<string>();
+        const iterations = 100;
+
+        for (let i = 0; i < iterations; i++) {
+            const packed = await pack(key, FrameType.DATA, new Uint8Array([i]));
+            const iv = packed.slice(0, 12);
+            ivs.add(Buffer.from(iv).toString("hex"));
+        }
+
+        expect(ivs.size).toBe(iterations);
+    });
+});
 
 // ---------------------------------------------------------------------------
 // deriveKey

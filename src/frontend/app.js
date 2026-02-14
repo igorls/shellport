@@ -127,12 +127,11 @@ function createSession() {
     let clientNonce = null;
     let handshakeComplete = false;
 
-    const sendMsg = (type, payload) => sendQ.add(async () => {
+    const sendMsg = (type, payload, forcePlaintext = false) => sendQ.add(async () => {
         if (ws.readyState === 1) {
-            if (sessionKey) {
+            if (sessionKey && !forcePlaintext) {
                 ws.send(await pack(sessionKey, type, payload));
             } else {
-                // Plaintext mode (no secret / pre-handshake)
                 ws.send(await pack(null, type, payload));
             }
         }
@@ -167,101 +166,107 @@ function createSession() {
         term.write('\x1b[90mConnecting...\x1b[0m\r\n');
     };
 
-    ws.onmessage = async e => {
-        const data = e.data;
+    ws.onmessage = e => {
+        recvQ.add(async () => {
+            const data = e.data;
 
-        // Protocol v2: First message from server is the nonce
-        if (!serverNonce && secret) {
-            serverNonce = new Uint8Array(data);
-            clientNonce = generateNonce();
+            // Protocol v2: First message from server is the nonce
+            if (!serverNonce && secret) {
+                serverNonce = new Uint8Array(data);
+                clientNonce = generateNonce();
 
-            // Send client nonce
-            sendMsg(3, clientNonce);  // FrameType.CLIENT_NONCE = 3
+                // Send client nonce (MUST be plaintext)
+                sendMsg(3, clientNonce, true); 
 
-            // Derive per-session key
-            const sessionSalt = await deriveSessionSalt(serverNonce, clientNonce);
-            sessionKey = await deriveKey(secret, sessionSalt);
+                // Derive per-session key
+                const sessionSalt = await deriveSessionSalt(serverNonce, clientNonce);
+                sessionKey = await deriveKey(secret, sessionSalt);
 
-            const encStatus = document.getElementById('enc-status');
-            if (encStatus) {
-                encStatus.innerHTML = '🔒 AES-256-GCM';
-                encStatus.classList.add('secure');
-            }
+                const encStatus = document.getElementById('enc-status');
+                if (encStatus) {
+                    encStatus.innerHTML = '🔒 AES-256-GCM';
+                    encStatus.classList.add('secure');
+                }
 
-            // Don't complete handshake yet — wait for potential TOTP challenge
-            history.replaceState(null, '', location.pathname);
-            return;
-        }
-
-        // Check for TOTP challenge (can arrive after nonce exchange or in plaintext mode)
-        if (!handshakeComplete) {
-            const decoded = await unpack(sessionKey || await (secret ? deriveKey(secret) : Promise.resolve(null)), data);
-            if (decoded && decoded.type === FT_TOTP_CHALLENGE) {
-                totpPending = true;
-                term.write('\x1b[2K\x1b[G');
-                term.write('\x1b[93m🔐 TOTP verification required\x1b[0m\r\n');
-                showTOTPModal(code => {
-                    const payload = new TextEncoder().encode(code);
-                    sendMsg(FT_TOTP_RESPONSE, payload);
-                });
+                if (location.hash) {
+                    history.replaceState(null, '', location.pathname);
+                }
                 return;
             }
 
-            // If not a TOTP challenge, it's either data or plaintext start
-            if (!serverNonce && !secret && !totpPending) {
-                // Plaintext mode — check if this is a TOTP challenge in plaintext
-                const plainView = new Uint8Array(data);
-                if (plainView.length >= 1 && plainView[0] === FT_TOTP_CHALLENGE) {
+            // Unpack message using sessionKey if available, otherwise baseKey
+            const decoded = await unpack(sessionKey || await (secret ? deriveKey(secret) : Promise.resolve(null)), data);
+            
+            if (!handshakeComplete) {
+                if (decoded && decoded.type === FT_TOTP_CHALLENGE) {
                     totpPending = true;
                     term.write('\x1b[2K\x1b[G');
                     term.write('\x1b[93m🔐 TOTP verification required\x1b[0m\r\n');
                     showTOTPModal(code => {
-                        sendMsg(FT_TOTP_RESPONSE, new TextEncoder().encode(code));
+                        const payload = new TextEncoder().encode(code);
+                        sendMsg(FT_TOTP_RESPONSE, payload);
                     });
+                    return;
+                }
+
+                // Plaintext mode TOTP challenge check
+                if (!serverNonce && !secret && !totpPending) {
+                    const plainView = new Uint8Array(data);
+                    if (plainView.length >= 1 && plainView[0] === FT_TOTP_CHALLENGE) {
+                        totpPending = true;
+                        term.write('\x1b[2K\x1b[G');
+                        term.write('\x1b[93m🔐 TOTP verification required\x1b[0m\r\n');
+                        showTOTPModal(code => {
+                            sendMsg(FT_TOTP_RESPONSE, new TextEncoder().encode(code));
+                        });
+                        return;
+                    }
+                }
+
+                // Transition to connected if we get data or any other frame (except challenge)
+                if (decoded && (decoded.type === 0 || !totpPending)) {
+                    completeHandshake(li, term);
+                    handshakeComplete = true;
+                    if (decoded.type === 0) term.write(decoded.payload);
                     return;
                 }
             }
 
-            // Normal connection established (no TOTP required)
-            handshakeComplete = true;
-            const statusEl = li.querySelector('.session-status');
-            if (statusEl) {
-                statusEl.classList.remove('pending');
-                statusEl.classList.add('running');
-            }
-            term.write('\x1b[2K\x1b[G');
-            term.resize();
-            term.canvas.focus();
-
-            // Fall through to handle this message as data
-            if (decoded && decoded.type === 0) {
-                term.write(decoded.payload);
-            }
-            return;
-        }
-
-        // Normal encrypted message handling
-        recvQ.add(async () => {
-            const decoded = await unpack(sessionKey || await deriveKey(secret), data);
+            // Normal message handling
             if (decoded && decoded.type === 0) {
                 // If TOTP was pending and we got data, it means we're approved!
                 if (totpPending) {
                     totpPending = false;
                     handshakeComplete = true;
                     removeTOTPModal();
-                    const statusEl = li.querySelector('.session-status');
-                    if (statusEl) {
-                        statusEl.classList.remove('pending');
-                        statusEl.classList.add('running');
-                    }
-                    term.write('\x1b[2K\x1b[G');
-                    term.resize();
-                    term.canvas.focus();
+                    completeHandshake(li, term);
                 }
                 term.write(decoded.payload);
             }
         });
     };
+
+    function completeHandshake(li, term) {
+        const statusEl = li.querySelector('.session-status');
+        if (statusEl) {
+            statusEl.classList.remove('pending');
+            statusEl.classList.add('running');
+        }
+        term.write('\x1b[2K\x1b[G');
+        term.resize();
+        term.canvas.focus();
+    }
+
+    function completeHandshake(li, term) {
+        const statusEl = li.querySelector('.session-status');
+        if (statusEl) {
+            statusEl.classList.remove('pending');
+            statusEl.classList.add('running');
+        }
+        term.write('\x1b[2K\x1b[G');
+        term.resize();
+        term.canvas.focus();
+    }
 
     ws.onclose = (e) => {
         const statusEl = li.querySelector('.session-status');

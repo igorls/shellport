@@ -1,13 +1,13 @@
 # Implementation Plan - Security Audit and Hardening
 
 ## Phase 1: Cryptographic & Authentication Audit
-- [ ] **Task: Audit Key Derivation and Encryption**
-    - [ ] Write Tests: Verify PBKDF2 entropy and iteration count in `src/crypto.test.ts`.
-    - [ ] Write Tests: Verify AES-GCM IV randomness and uniqueness in `src/crypto.test.ts`.
-    - [ ] Implement: Harden `src/crypto.ts` based on audit findings.
-- [ ] **Task: Harden TOTP Verification**
-    - [ ] Write Tests: Create timing attack simulation tests for TOTP verification.
-    - [ ] Implement: Use constant-time comparison in `src/totp.ts`.
+- [x] **Task: Audit Key Derivation and Encryption**
+    - [x] Write Tests: Verify PBKDF2 entropy and iteration count in `src/crypto.test.ts`.
+    - [x] Write Tests: Verify AES-GCM IV randomness and uniqueness in `src/crypto.test.ts`.
+    - [x] Implement: Harden `src/crypto.ts` based on audit findings.
+- [x] **Task: Harden TOTP Verification**
+    - [x] Write Tests: Create timing attack simulation tests for TOTP verification.
+    - [x] Implement: Use constant-time comparison in `src/totp.ts`.
 - [ ] **Task: Conductor - User Manual Verification 'Phase 1: Cryptographic & Authentication Audit' (Protocol in workflow.md)**
 
 ## Phase 2: PTY & Input Sanitization

@@ -13,8 +13,8 @@
 
 import type { DecodedFrame, FrameTypeValue } from "./types.js";
 
-const PBKDF2_ITERATIONS = 100_000;
-const NONCE_LENGTH = 16;
+export const PBKDF2_ITERATIONS = 100_000;
+export const NONCE_LENGTH = 16;
 const SALT_PREFIX = "shellport-v2";
 
 export const PROTOCOL_VERSION = 2;
