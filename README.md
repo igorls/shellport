@@ -65,10 +65,10 @@ ShellPort is designed with security-first principles:
 
 | Mode | Command | Auth | Encryption | Use Case |
 |------|---------|------|------------|----------|
-| **Full 2FA** | `shellport server --totp` | Secret + TOTP | AES-256-GCM | Maximum security |
-| **Encrypted** | `shellport server` | URL secret | AES-256-GCM | Quick secure sessions |
-| **TOTP only** | `shellport server --no-secret --totp` | TOTP code | None* | Remote via VPN/Tailscale |
-| **Plaintext** | `shellport server --no-secret` | None | None | Localhost dev only |
+| **Full security** | `shellport server` | Secret + TOTP | AES-256-GCM | Default — maximum security |
+| **Encrypted only** | `shellport server --no-totp` | URL secret | AES-256-GCM | Trusted environment |
+| **TOTP only** | `shellport server --no-secret` | TOTP code | None* | Remote via VPN/Tailscale |
+| **Plaintext** | `shellport server --no-secret --no-totp` | None | None | Localhost dev only |
 
 \* When using TOTP-only mode over Tailscale/WireGuard, the VPN tunnel provides encryption.
 
@@ -95,14 +95,14 @@ ShellPort is designed with security-first principles:
 ### Command Line Security Flags
 
 ```bash
-# Full security — encrypted + TOTP 2FA
-shellport server --totp
-
-# Encrypted only (default)
+# Full security — encrypted + TOTP 2FA (default)
 shellport server
 
+# Encrypted only, no TOTP
+shellport server --no-totp
+
 # TOTP only — ideal for VPN/Tailscale
-shellport server --no-secret --totp
+shellport server --no-secret
 
 # Development mode (relaxes origin checks)
 shellport server --dev
@@ -117,7 +117,7 @@ shellport server --totp-reset
 - Connection approval requires terminal access to the server
 - TOTP secret is stored in `~/.shellport-totp-secret` — protect this file
 
-> ⚠️ **For production use**, enable TOTP (`--totp`) and keep approval mode on. Use `--no-secret` only with TOTP over a VPN, or on isolated trusted networks.
+> ⚠️ **For production use**, keep TOTP enabled (it's on by default) and keep approval mode on. Use `--no-secret` only with TOTP over a VPN, or on isolated trusted networks.
 
 ### 🖥️ NanoTermV2 — Canvas Terminal Emulator
 - **Canvas2D** hardware-accelerated rendering (no DOM nodes)
@@ -181,15 +181,16 @@ bun run build:binaries  # Cross-compile all platforms
 ### Server
 
 ```bash
-# Start with auto-generated secret (recommended)
+# Start with full security — encrypted + TOTP 2FA (default)
 shellport server
 # → Prints: 🌐 Open in browser: http://localhost:7681/#<random-secret>
+# → On first run, shows QR code for authenticator pairing
 
-# Enable TOTP 2FA (scans QR on first run)
-shellport server --totp
+# Encrypted only, skip TOTP
+shellport server --no-totp
 
 # TOTP only — no encryption (use over VPN/Tailscale)
-shellport server --no-secret --totp
+shellport server --no-secret
 
 # Fixed secret (not recommended — prefer auto-generated)
 shellport server --secret your-secret-here
@@ -221,7 +222,7 @@ shellport client ws://host:7681/ws --secret your-secret-here
 | `--port, -p` | Server port | `7681` |
 | `--secret, -s` | Fixed encryption secret | *(auto-generated)* |
 | `--no-secret` | Disable encryption (plaintext) | *(off)* |
-| `--totp` | Enable TOTP 2FA (shows QR on first run) | *(off)* |
+| `--no-totp` | Disable TOTP 2FA authentication | *(off)* |
 | `--totp-reset` | Regenerate TOTP pairing secret | *(off)* |
 | `--no-approval` | Disable connection approval prompts | *(off)* |
 | `--allow-localhost, --dev` | Allow localhost origin bypass | *(off)* |
@@ -378,7 +379,7 @@ Browser                          Server
 | **Rate Limiting** | 5 attempts per IP per minute |
 | **Session Cap** | Max 10 concurrent PTY sessions |
 | **Security Headers** | CSP, X-Frame-Options, nosniff |
-| **TOTP-only Mode** | `--no-secret --totp` for VPN/Tailscale setups |
+| **TOTP-only Mode** | `--no-secret` for VPN/Tailscale setups (TOTP on by default) |
 | **Plaintext Mode** | Available with `--no-secret` (for localhost / VPN) |
 
 > ⚠️ ShellPort is designed for **private terminal access**, not multi-tenant hosting. Keep approval mode enabled for production use.

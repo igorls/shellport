@@ -1,7 +1,7 @@
 {
   "name": "shellport",
-  "version": "0.1.0",
-  "description": "Zero-dependency encrypted terminal bridge with built-in web UI. Share your shell over the network with E2E encryption, powered by Bun.",
+  "version": "0.2.0",
+  "description": "Zero-dependency encrypted terminal bridge with TOTP 2FA and built-in web UI. Share your shell over the network with E2E encryption, powered by Bun.",
   "type": "module",
   "bin": {
     "shellport": "./src/index.ts"
@@ -22,6 +22,9 @@
     "pty",
     "websocket",
     "encryption",
+    "totp",
+    "2fa",
+    "authenticator",
     "shell",
     "remote",
     "bun",
