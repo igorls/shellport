@@ -23,6 +23,9 @@ import { verifyTOTP } from "./totp.js";
 /** Maximum concurrent PTY sessions */
 const MAX_SESSIONS = 10;
 
+/** Maximum WebSocket frame size (1MB) to prevent memory exhaustion attacks */
+const MAX_FRAME_SIZE = 1024 * 1024;
+
 /** Seconds to wait for a valid auth frame before disconnecting */
 const AUTH_TIMEOUT_S = 10;
 
@@ -250,6 +253,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
                 const sessionData = ws.data as unknown as SessionData;
                 const msgBuffer = message as unknown as ArrayBuffer;
 
+                if (msgBuffer.byteLength > MAX_FRAME_SIZE) {
+                    console.log(`[ShellPort] ❌ Oversized frame from ${sessionData.clientIP} (${msgBuffer.byteLength} bytes) — disconnecting.`);
+                    ws.close(4009, "Message too large");
+                    return;
+                }
+
                 // ─── TOTP verification pending ───
                 if (sessionData.totpPending && config.totp && config.totpSecret) {
                     sessionData.recvQ.add(async () => {
@@ -427,6 +436,25 @@ function handleDataMessage(
     });
 }
 
+/**
+ * Sanitizes data coming from the PTY before sending it to the client.
+ * Blocks sequences that could be used for fingerprinting or dangerous client-side actions.
+ */
+export function sanitizePTYData(data: Uint8Array): Uint8Array {
+    let str = new TextDecoder().decode(data);
+    
+    // 1. Block DSR (Device Status Report) - CSI 6 n
+    // Prevents the shell from querying the client's cursor position.
+    str = str.replace(/\x1b\[6n/g, "");
+
+    // 2. Block OSC 52 (Clipboard Write)
+    // Even though the frontend has a confirmation prompt, blocking at server level 
+    // provides defense-in-depth for users who might disable prompts.
+    str = str.replace(/\x1b\]52;[^\x07\x1b]*[\x07\x1b\\]/g, "");
+
+    return new TextEncoder().encode(str);
+}
+
 /** Spawn a PTY process and wire it to the WebSocket */
 function spawnPTY(
     ws: any,
@@ -452,7 +480,8 @@ function spawnPTY(
                 data(_term: unknown, data: Uint8Array) {
                     sessionData.sendQ.add(async () => {
                         if (ws.readyState === 1) {
-                            ws.send(await pack(cryptoKey, FrameType.DATA, data));
+                            const sanitized = sanitizePTYData(data);
+                            ws.send(await pack(cryptoKey, FrameType.DATA, sanitized));
                         }
                     });
                 },

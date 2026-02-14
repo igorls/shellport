@@ -1,6 +1,6 @@
 # Implementation Plan - Security Audit and Hardening
 
-## Phase 1: Cryptographic & Authentication Audit
+## Phase 1: Cryptographic & Authentication Audit [checkpoint: f3cf2ed]
 - [x] **Task: Audit Key Derivation and Encryption**
     - [x] Write Tests: Verify PBKDF2 entropy and iteration count in `src/crypto.test.ts`.
     - [x] Write Tests: Verify AES-GCM IV randomness and uniqueness in `src/crypto.test.ts`.
@@ -8,15 +8,15 @@
 - [x] **Task: Harden TOTP Verification**
     - [x] Write Tests: Create timing attack simulation tests for TOTP verification.
     - [x] Implement: Use constant-time comparison in `src/totp.ts`.
-- [ ] **Task: Conductor - User Manual Verification 'Phase 1: Cryptographic & Authentication Audit' (Protocol in workflow.md)**
+- [x] **Task: Conductor - User Manual Verification 'Phase 1: Cryptographic & Authentication Audit' (Protocol in workflow.md)**
 
 ## Phase 2: PTY & Input Sanitization
-- [ ] **Task: Audit PTY Sequence Handling**
-    - [ ] Write Tests: Simulate malicious terminal escape sequences in `src/server.test.ts`.
-    - [ ] Implement: Enhance PTY sanitization in `src/server.ts`.
-- [ ] **Task: WebSocket Bounds Checking**
-    - [ ] Write Tests: Fuzz WebSocket message handling with malformed and over-sized frames.
-    - [ ] Implement: Enforce strict bounds checking in `src/server.ts` and `src/types.ts`.
+- [x] **Task: Audit PTY Sequence Handling**
+    - [x] Write Tests: Simulate malicious terminal escape sequences in `src/server.test.ts`.
+    - [x] Implement: Enhance PTY sanitization in `src/server.ts`.
+- [x] **Task: WebSocket Bounds Checking**
+    - [x] Write Tests: Fuzz WebSocket message handling with malformed and over-sized frames.
+    - [x] Implement: Enforce strict bounds checking in `src/server.ts` and `src/types.ts`.
 - [ ] **Task: Conductor - User Manual Verification 'Phase 2: PTY & Input Sanitization' (Protocol in workflow.md)**
 
 ## Phase 3: Frontend Security & Final Integration
