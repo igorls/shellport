@@ -4,6 +4,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 let cryptoKey = null;
+let cachedSecret = null;
 let sessionCount = 0;
 const activeSessions = new Map();
 let currentSessionId = null;
@@ -13,6 +14,16 @@ const FT_TOTP_CHALLENGE = 6;
 const FT_TOTP_RESPONSE = 7;
 
 const wsUrl = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
+
+// Memoized key derivation to prevent repeated expensive PBKDF2 calls
+// during the handshake phase or when processing multiple messages.
+async function getBaseKey(secret) {
+    if (!secret) return null;
+    if (secret === cachedSecret && cryptoKey) return cryptoKey;
+    cryptoKey = await deriveKey(secret);
+    cachedSecret = secret;
+    return cryptoKey;
+}
 
 async function init() {
     const secret = location.hash.substring(1);
@@ -195,7 +206,7 @@ function createSession() {
 
         // Check for TOTP challenge (can arrive after nonce exchange or in plaintext mode)
         if (!handshakeComplete) {
-            const decoded = await unpack(sessionKey || await (secret ? deriveKey(secret) : Promise.resolve(null)), data);
+            const decoded = await unpack(sessionKey || await getBaseKey(secret), data);
             if (decoded && decoded.type === FT_TOTP_CHALLENGE) {
                 totpPending = true;
                 term.write('\x1b[2K\x1b[G');
@@ -242,7 +253,7 @@ function createSession() {
 
         // Normal encrypted message handling
         recvQ.add(async () => {
-            const decoded = await unpack(sessionKey || await deriveKey(secret), data);
+            const decoded = await unpack(sessionKey || await getBaseKey(secret), data);
             if (decoded && decoded.type === 0) {
                 // If TOTP was pending and we got data, it means we're approved!
                 if (totpPending) {
