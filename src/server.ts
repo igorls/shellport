@@ -19,6 +19,7 @@ import { SeqQueue, FrameType } from "./types.js";
 import type { ServerConfig, SessionData } from "./types.js";
 import { buildHTML } from "./frontend/build.js";
 import { verifyTOTP } from "./totp.js";
+import { RateLimiter } from "./rate-limit.js";
 
 /** Maximum concurrent PTY sessions */
 const MAX_SESSIONS = 10;
@@ -28,12 +29,6 @@ const AUTH_TIMEOUT_S = 10;
 
 /** Seconds to wait for TOTP code entry before disconnecting */
 const TOTP_TIMEOUT_S = 60;
-
-/** Maximum rate limit attempts per window per IP */
-const RATE_LIMIT_MAX = 5;
-
-/** Rate limit sliding window in milliseconds */
-const RATE_LIMIT_WINDOW_MS = 60_000;
 
 /** Maximum terminal dimensions for resize validation */
 const MAX_COLS = 1000;
@@ -57,8 +52,8 @@ const LOCALHOST_ADDRESSES = ['localhost', '127.0.0.1', '::1', '0.0.0.0', '::'];
 /** Shells considered safe for PTY spawning */
 const SAFE_SHELLS = ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/sh', '/usr/bin/zsh', '/usr/bin/fish', '/usr/local/bin/bash', '/usr/local/bin/zsh', '/usr/local/bin/fish', 'bash', 'sh', 'zsh', 'fish'];
 
-/** Rate limit tracker: IP -> sliding window of timestamps */
-const rateLimitMap = new Map<string, number[]>();
+/** Rate limiter instance with automatic cleanup */
+const rateLimiter = new RateLimiter();
 
 /** Atomic session counter */
 let activeSessions = 0;
@@ -75,30 +70,6 @@ function buildSafeEnv(): Record<string, string> {
 
 function isLocalhost(hostname: string): boolean {
     return LOCALHOST_ADDRESSES.includes(hostname.toLowerCase());
-}
-
-/** Sliding window rate limiter — tracks actual timestamps per IP */
-function checkRateLimit(ip: string): boolean {
-    const now = Date.now();
-    const windowStart = now - RATE_LIMIT_WINDOW_MS;
-    let timestamps = rateLimitMap.get(ip);
-
-    if (!timestamps) {
-        rateLimitMap.set(ip, [now]);
-        return true;
-    }
-
-    // Prune timestamps outside the window
-    timestamps = timestamps.filter(t => t > windowStart);
-
-    if (timestamps.length >= RATE_LIMIT_MAX) {
-        rateLimitMap.set(ip, timestamps);
-        return false;
-    }
-
-    timestamps.push(now);
-    rateLimitMap.set(ip, timestamps);
-    return true;
 }
 
 function incrementSessions(): number {
@@ -122,6 +93,9 @@ const SECURITY_HEADERS = {
 export async function startServer(config: ServerConfig): Promise<void> {
     const baseKey = config.secret ? await deriveKey(config.secret) : null;
     const safeEnv = buildSafeEnv();
+
+    // Start background cleanup of expired rate limit entries
+    rateLimiter.startCleanupInterval();
 
     console.log(`[ShellPort] Starting PTY WebSocket Server on port ${config.port}...`);
 
@@ -168,7 +142,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
             if (url.pathname === "/ws") {
                 const clientIP = server.requestIP(req)?.address || "unknown";
 
-                if (!checkRateLimit(clientIP)) {
+                if (!rateLimiter.check(clientIP)) {
                     return new Response("Too many requests", { status: 429 });
                 }
 
