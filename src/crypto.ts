@@ -124,6 +124,7 @@ export async function pack(
 /**
  * Unpack a message, decrypting if a key is provided.
  * Returns null on decryption failure or malformed data.
+ * Optimization: Uses subarray() to avoid memory copies.
  */
 export async function unpack(
   key: CryptoKey | null,
@@ -133,13 +134,13 @@ export async function unpack(
 
   if (key) {
     if (buf.length < 29) return null;
-    const iv = buf.slice(0, 12);
+    const iv = buf.subarray(0, 12);
     try {
       buf = new Uint8Array(
         await crypto.subtle.decrypt(
           { name: "AES-GCM", iv },
           key,
-          buf.slice(12)
+          buf.subarray(12)
         )
       );
     } catch {
@@ -148,7 +149,7 @@ export async function unpack(
   }
 
   if (buf.length < 1) return null;
-  return { type: buf[0] as FrameTypeValue, payload: buf.slice(1) };
+  return { type: buf[0] as FrameTypeValue, payload: buf.subarray(1) };
 }
 
 /**
@@ -220,23 +221,24 @@ async function pack(key, type, payload) {
 }
 
 // Unpack a message, decrypting if key provided
+// Optimization: Uses subarray() to avoid memory copies.
 async function unpack(key, data) {
   let buf = new Uint8Array(data);
   if (key) {
     if (buf.length < 29) return null;
-    const iv = buf.slice(0, 12);
+    const iv = buf.subarray(0, 12);
     try {
       buf = new Uint8Array(await crypto.subtle.decrypt(
         { name: "AES-GCM", iv },
         key,
-        buf.slice(12)
+        buf.subarray(12)
       ));
     } catch {
       return null;
     }
   }
   if (buf.length < 1) return null;
-  return { type: buf[0], payload: buf.slice(1) };
+  return { type: buf[0], payload: buf.subarray(1) };
 }
 
 // Sequential async queue for ordered message handling
