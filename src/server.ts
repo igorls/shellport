@@ -101,6 +101,20 @@ function checkRateLimit(ip: string): boolean {
     return true;
 }
 
+function cleanupRateLimits() {
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW_MS;
+
+    for (const [ip, timestamps] of rateLimitMap.entries()) {
+        const validTimestamps = timestamps.filter(t => t > windowStart);
+        if (validTimestamps.length === 0) {
+            rateLimitMap.delete(ip);
+        } else if (validTimestamps.length < timestamps.length) {
+            rateLimitMap.set(ip, validTimestamps);
+        }
+    }
+}
+
 function incrementSessions(): number {
     return ++activeSessions;
 }
@@ -134,6 +148,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
     if (config.allowLocalhost) {
         console.log("[ShellPort] ⚠️  Dev mode: localhost origin bypass enabled");
     }
+
+    // Start rate limit cleanup interval
+    setInterval(cleanupRateLimits, RATE_LIMIT_WINDOW_MS);
 
     if (!baseKey) {
         console.log("[ShellPort] ⚠️  WARNING: No encryption enabled. Use --secret for production.");
