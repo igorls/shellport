@@ -101,6 +101,21 @@ function checkRateLimit(ip: string): boolean {
     return true;
 }
 
+/** Periodic cleanup of stale rate limit entries to prevent memory leaks */
+function cleanupRateLimits() {
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW_MS;
+
+    for (const [ip, timestamps] of rateLimitMap.entries()) {
+        const validTimestamps = timestamps.filter(t => t > windowStart);
+        if (validTimestamps.length === 0) {
+            rateLimitMap.delete(ip);
+        } else if (validTimestamps.length < timestamps.length) {
+            rateLimitMap.set(ip, validTimestamps);
+        }
+    }
+}
+
 function incrementSessions(): number {
     return ++activeSessions;
 }
@@ -158,6 +173,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
     }
 
     const htmlClient = buildHTML(getCryptoJS());
+
+    // Start periodic cleanup of rate limit map
+    setInterval(cleanupRateLimits, RATE_LIMIT_WINDOW_MS);
 
     Bun.serve({
         port: config.port,
