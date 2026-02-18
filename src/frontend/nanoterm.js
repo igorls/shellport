@@ -191,6 +191,10 @@ class NanoTermV2 {
         // Focus state
         this.focused = false;
 
+        // Caching
+        this.fontCache = {};
+        this.lastFont = null;
+
         // UTF-8 decoder for streaming
         this.decoder = new TextDecoder('utf-8', { fatal: false });
         this.utf8Buffer = new Uint8Array(4);
@@ -217,6 +221,24 @@ class NanoTermV2 {
     // -------------------------------------------------------------------------
     // Initialization Helpers
     // -------------------------------------------------------------------------
+
+    getCachedFont(flags) {
+        const styleFlags = flags & (ATTR.BOLD | ATTR.ITALIC);
+
+        if (this.fontCache[styleFlags]) {
+            return this.fontCache[styleFlags];
+        }
+
+        const fontParts = [];
+        if (styleFlags & ATTR.BOLD) fontParts.push('bold');
+        if (styleFlags & ATTR.ITALIC) fontParts.push('italic');
+        fontParts.push(`${this.options.fontSize}px`);
+        fontParts.push(this.options.fontFamily);
+
+        const font = fontParts.join(' ');
+        this.fontCache[styleFlags] = font;
+        return font;
+    }
 
     measureChar() {
         const fontSize = this.options.fontSize;
@@ -1007,6 +1029,8 @@ class NanoTermV2 {
 
         this.ctx.save();
         this.ctx.translate(pad, pad);
+        this.ctx.textBaseline = 'top';
+        this.lastFont = null;
 
         const buffer = this.getBuffer();
         const scrollbackVisible = this.scrollbackOffset > 0 && !this.useAlternate;
@@ -1103,28 +1127,31 @@ class NanoTermV2 {
     renderRunText(row, startX, length, baseline, fg, bg, flags) {
         // Backgrounds are already drawn in renderRow pass 1
 
-        // Collect text
-        let text = '';
-        for (let x = startX; x < startX + length; x++) {
-            text += row[x]?.char || ' ';
-        }
+        // Check if we need to render anything
+        const hasDecorations = flags & (ATTR.UNDERLINE | ATTR.DOUBLE_UNDERLINE | ATTR.STRIKETHROUGH);
+        let hasContent = false;
 
-        if (!text.trim() && !(flags & (ATTR.UNDERLINE | ATTR.DOUBLE_UNDERLINE | ATTR.STRIKETHROUGH))) {
-            return;
+        if (!hasDecorations) {
+            for (let i = 0; i < length; i++) {
+                const char = row[startX + i]?.char;
+                if (char && char !== ' ') {
+                    hasContent = true;
+                    break;
+                }
+            }
+            if (!hasContent) return;
         }
 
         // Text color
         const textColor = (flags & ATTR.INVERSE) ? this.getColor(bg) : this.getColor(fg);
         this.ctx.fillStyle = textColor;
 
-        // Font style
-        const fontParts = [];
-        if (flags & ATTR.BOLD) fontParts.push('bold');
-        if (flags & ATTR.ITALIC) fontParts.push('italic');
-        fontParts.push(`${this.options.fontSize}px`);
-        fontParts.push(this.options.fontFamily);
-        this.ctx.font = fontParts.join(' ');
-        this.ctx.textBaseline = 'top';
+        // Font style (cached)
+        const font = this.getCachedFont(flags);
+        if (this.lastFont !== font) {
+            this.ctx.font = font;
+            this.lastFont = font;
+        }
 
         // Render each character at its exact cell position to prevent drift
         for (let i = 0; i < length; i++) {
