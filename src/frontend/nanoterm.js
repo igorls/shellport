@@ -199,6 +199,7 @@ class NanoTermV2 {
         // Rendering
         this.renderPending = false;
         this.lastRenderTime = 0;
+        this.lastFont = null;
 
         // Callbacks
         this.onResize = null;
@@ -282,6 +283,7 @@ class NanoTermV2 {
         this.canvas.style.width = rect.width + 'px';
         this.canvas.style.height = rect.height + 'px';
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        this.lastFont = null;
 
         this.resizeBuffer(this.primaryBuffer);
         if (this.alternateBuffer.length > 0) {
@@ -1104,12 +1106,15 @@ class NanoTermV2 {
         // Backgrounds are already drawn in renderRow pass 1
 
         // Collect text
-        let text = '';
+        let hasContent = false;
         for (let x = startX; x < startX + length; x++) {
-            text += row[x]?.char || ' ';
+            if ((row[x]?.char || ' ') !== ' ') {
+                hasContent = true;
+                break;
+            }
         }
 
-        if (!text.trim() && !(flags & (ATTR.UNDERLINE | ATTR.DOUBLE_UNDERLINE | ATTR.STRIKETHROUGH))) {
+        if (!hasContent && !(flags & (ATTR.UNDERLINE | ATTR.DOUBLE_UNDERLINE | ATTR.STRIKETHROUGH))) {
             return;
         }
 
@@ -1123,7 +1128,12 @@ class NanoTermV2 {
         if (flags & ATTR.ITALIC) fontParts.push('italic');
         fontParts.push(`${this.options.fontSize}px`);
         fontParts.push(this.options.fontFamily);
-        this.ctx.font = fontParts.join(' ');
+        const fontString = fontParts.join(' ');
+
+        if (this.lastFont !== fontString) {
+            this.ctx.font = fontString;
+            this.lastFont = fontString;
+        }
         this.ctx.textBaseline = 'top';
 
         // Render each character at its exact cell position to prevent drift
