@@ -58,7 +58,7 @@ const LOCALHOST_ADDRESSES = ['localhost', '127.0.0.1', '::1', '0.0.0.0', '::'];
 const SAFE_SHELLS = ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/sh', '/usr/bin/zsh', '/usr/bin/fish', '/usr/local/bin/bash', '/usr/local/bin/zsh', '/usr/local/bin/fish', 'bash', 'sh', 'zsh', 'fish'];
 
 /** Rate limit tracker: IP -> sliding window of timestamps */
-const rateLimitMap = new Map<string, number[]>();
+export const rateLimitMap = new Map<string, number[]>();
 
 /** Atomic session counter */
 let activeSessions = 0;
@@ -78,7 +78,7 @@ function isLocalhost(hostname: string): boolean {
 }
 
 /** Sliding window rate limiter — tracks actual timestamps per IP */
-function checkRateLimit(ip: string): boolean {
+export function checkRateLimit(ip: string): boolean {
     const now = Date.now();
     const windowStart = now - RATE_LIMIT_WINDOW_MS;
     let timestamps = rateLimitMap.get(ip);
@@ -99,6 +99,21 @@ function checkRateLimit(ip: string): boolean {
     timestamps.push(now);
     rateLimitMap.set(ip, timestamps);
     return true;
+}
+
+/** Periodic cleanup to prevent memory leaks in rateLimitMap */
+export function cleanupRateLimits(): void {
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW_MS;
+
+    for (const [ip, timestamps] of rateLimitMap.entries()) {
+        const validTimestamps = timestamps.filter(t => t > windowStart);
+        if (validTimestamps.length === 0) {
+            rateLimitMap.delete(ip);
+        } else if (validTimestamps.length < timestamps.length) {
+            rateLimitMap.set(ip, validTimestamps);
+        }
+    }
 }
 
 function incrementSessions(): number {
@@ -134,6 +149,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
     if (config.allowLocalhost) {
         console.log("[ShellPort] ⚠️  Dev mode: localhost origin bypass enabled");
     }
+
+    // Start background cleanup task
+    setInterval(cleanupRateLimits, RATE_LIMIT_WINDOW_MS).unref();
 
     if (!baseKey) {
         console.log("[ShellPort] ⚠️  WARNING: No encryption enabled. Use --secret for production.");
