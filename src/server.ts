@@ -33,7 +33,7 @@ const TOTP_TIMEOUT_S = 60;
 const RATE_LIMIT_MAX = 5;
 
 /** Rate limit sliding window in milliseconds */
-const RATE_LIMIT_WINDOW_MS = 60_000;
+export const RATE_LIMIT_WINDOW_MS = 60_000;
 
 /** Maximum terminal dimensions for resize validation */
 const MAX_COLS = 1000;
@@ -58,7 +58,26 @@ const LOCALHOST_ADDRESSES = ['localhost', '127.0.0.1', '::1', '0.0.0.0', '::'];
 const SAFE_SHELLS = ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/sh', '/usr/bin/zsh', '/usr/bin/fish', '/usr/local/bin/bash', '/usr/local/bin/zsh', '/usr/local/bin/fish', 'bash', 'sh', 'zsh', 'fish'];
 
 /** Rate limit tracker: IP -> sliding window of timestamps */
-const rateLimitMap = new Map<string, number[]>();
+export const rateLimitMap = new Map<string, number[]>();
+
+/**
+ * Periodically cleanup stale rate limit entries to prevent memory leaks.
+ */
+export function cleanupRateLimits() {
+    const now = Date.now();
+    const windowStart = now - RATE_LIMIT_WINDOW_MS;
+
+    for (const [ip, timestamps] of rateLimitMap) {
+        if (timestamps.length === 0) {
+            rateLimitMap.delete(ip);
+            continue;
+        }
+        // If the newest timestamp is outside the window, all are outside.
+        if (timestamps[timestamps.length - 1] <= windowStart) {
+            rateLimitMap.delete(ip);
+        }
+    }
+}
 
 /** Atomic session counter */
 let activeSessions = 0;
@@ -158,6 +177,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
     }
 
     const htmlClient = buildHTML(getCryptoJS());
+
+    // Initialize rate limit cleanup
+    setInterval(cleanupRateLimits, RATE_LIMIT_WINDOW_MS);
 
     Bun.serve({
         port: config.port,
