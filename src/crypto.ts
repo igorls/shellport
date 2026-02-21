@@ -133,13 +133,14 @@ export async function unpack(
 
   if (key) {
     if (buf.length < 29) return null;
-    const iv = buf.slice(0, 12);
+    // Use subarray (zero-copy view) instead of slice (copy)
+    const iv = buf.subarray(0, 12);
     try {
       buf = new Uint8Array(
         await crypto.subtle.decrypt(
           { name: "AES-GCM", iv },
           key,
-          buf.slice(12)
+          buf.subarray(12)
         )
       );
     } catch {
@@ -148,7 +149,7 @@ export async function unpack(
   }
 
   if (buf.length < 1) return null;
-  return { type: buf[0] as FrameTypeValue, payload: buf.slice(1) };
+  return { type: buf[0] as FrameTypeValue, payload: buf.subarray(1) };
 }
 
 /**
@@ -224,19 +225,19 @@ async function unpack(key, data) {
   let buf = new Uint8Array(data);
   if (key) {
     if (buf.length < 29) return null;
-    const iv = buf.slice(0, 12);
+    const iv = buf.subarray(0, 12);
     try {
       buf = new Uint8Array(await crypto.subtle.decrypt(
         { name: "AES-GCM", iv },
         key,
-        buf.slice(12)
+        buf.subarray(12)
       ));
     } catch {
       return null;
     }
   }
   if (buf.length < 1) return null;
-  return { type: buf[0], payload: buf.slice(1) };
+  return { type: buf[0], payload: buf.subarray(1) };
 }
 
 // Sequential async queue for ordered message handling
