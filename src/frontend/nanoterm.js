@@ -207,6 +207,9 @@ class NanoTermV2 {
         this.onFocus = null;
         this.onBlur = null;
 
+        // Font cache to reduce GC overhead
+        this.fontCache = {};
+
         // Init
         this.measureChar();
         this.resetTerminal();
@@ -220,6 +223,8 @@ class NanoTermV2 {
     // -------------------------------------------------------------------------
 
     measureChar() {
+        // Clear font cache as options (fontSize/fontFamily) may have changed
+        this.fontCache = {};
         const fontSize = this.options.fontSize;
         this.ctx.font = `${fontSize}px ${this.options.fontFamily}`;
         const metrics = this.ctx.measureText('W');
@@ -1108,7 +1113,8 @@ class NanoTermV2 {
         // Collect text
         let hasContent = false;
         for (let x = startX; x < startX + length; x++) {
-            if ((row[x]?.char || ' ') !== ' ') {
+            // Optimization: Avoid optional chaining/defaults as row elements are guaranteed
+            if (row[x].char !== ' ') {
                 hasContent = true;
                 break;
             }
@@ -1122,13 +1128,19 @@ class NanoTermV2 {
         const textColor = (flags & ATTR.INVERSE) ? this.getColor(bg) : this.getColor(fg);
         this.ctx.fillStyle = textColor;
 
-        // Font style
-        const fontParts = [];
-        if (flags & ATTR.BOLD) fontParts.push('bold');
-        if (flags & ATTR.ITALIC) fontParts.push('italic');
-        fontParts.push(`${this.options.fontSize}px`);
-        fontParts.push(this.options.fontFamily);
-        const fontString = fontParts.join(' ');
+        // Font style - Cached to reduce GC overhead
+        const styleFlags = flags & (ATTR.BOLD | ATTR.ITALIC);
+        let fontString = this.fontCache[styleFlags];
+
+        if (!fontString) {
+            const fontParts = [];
+            if (flags & ATTR.BOLD) fontParts.push('bold');
+            if (flags & ATTR.ITALIC) fontParts.push('italic');
+            fontParts.push(`${this.options.fontSize}px`);
+            fontParts.push(this.options.fontFamily);
+            fontString = fontParts.join(' ');
+            this.fontCache[styleFlags] = fontString;
+        }
 
         if (this.lastFont !== fontString) {
             this.ctx.font = fontString;
