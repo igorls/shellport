@@ -35,6 +35,9 @@ const RATE_LIMIT_MAX = 5;
 /** Rate limit sliding window in milliseconds */
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 
+/** Maximum number of IPs to track for rate limiting before rejecting new ones */
+export const MAX_TRACKED_IPS = 1000;
+
 /** Maximum terminal dimensions for resize validation */
 const MAX_COLS = 1000;
 const MAX_ROWS = 200;
@@ -93,12 +96,18 @@ function isLocalhost(hostname: string): boolean {
 }
 
 /** Sliding window rate limiter — tracks actual timestamps per IP */
-function checkRateLimit(ip: string): boolean {
+export function checkRateLimit(ip: string): boolean {
     const now = Date.now();
     const windowStart = now - RATE_LIMIT_WINDOW_MS;
     let timestamps = rateLimitMap.get(ip);
 
     if (!timestamps) {
+        if (rateLimitMap.size >= MAX_TRACKED_IPS) {
+            cleanupRateLimits();
+            if (rateLimitMap.size >= MAX_TRACKED_IPS) {
+                return false;
+            }
+        }
         rateLimitMap.set(ip, [now]);
         return true;
     }
