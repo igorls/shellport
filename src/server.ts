@@ -35,6 +35,9 @@ const RATE_LIMIT_MAX = 5;
 /** Rate limit sliding window in milliseconds */
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 
+/** Maximum allowed WebSocket message size (1 MB) to prevent memory exhaustion */
+export const MAX_MESSAGE_SIZE = 1024 * 1024;
+
 /** Maximum terminal dimensions for resize validation */
 const MAX_COLS = 1000;
 const MAX_ROWS = 200;
@@ -263,6 +266,18 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
             async message(ws, message) {
                 const sessionData = ws.data as unknown as SessionData;
+
+                // Security: Reject large messages to prevent memory exhaustion
+                const msgLen = typeof message === 'string'
+                    ? Buffer.byteLength(message)
+                    : (message as Buffer).byteLength;
+
+                if (msgLen > MAX_MESSAGE_SIZE) {
+                    console.warn(`[ShellPort] ⚠️  Rejected large message from ${sessionData.clientIP} (${msgLen} bytes)`);
+                    ws.close(1009, "Message too big");
+                    return;
+                }
+
                 const msgBuffer = message as unknown as ArrayBuffer;
 
                 // ─── TOTP verification pending ───
