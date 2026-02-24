@@ -275,7 +275,14 @@ export async function startServer(config: ServerConfig): Promise<ReturnType<type
             async message(ws, message) {
                 const sessionData = ws.data as unknown as SessionData;
 
-                const msgLen = typeof message === "string" ? Buffer.byteLength(message) : (message as ArrayBuffer).byteLength;
+                let msgLen = 0;
+                if (typeof message === "string") {
+                    msgLen = Buffer.byteLength(message);
+                } else if (message instanceof Buffer) {
+                    msgLen = message.length;
+                } else {
+                    msgLen = (message as unknown as ArrayBuffer).byteLength;
+                }
 
                 if (msgLen > MAX_MESSAGE_SIZE) {
                     console.error(`[ShellPort] ❌ Message too large from ${sessionData.clientIP}: ${msgLen} bytes`);
@@ -283,6 +290,7 @@ export async function startServer(config: ServerConfig): Promise<ReturnType<type
                     return;
                 }
 
+                // Force cast to ArrayBuffer via unknown to handle both Buffer and ArrayBuffer types
                 const msgBuffer = message as unknown as ArrayBuffer;
 
                 // ─── TOTP verification pending ───

@@ -45,6 +45,6 @@
     "CHANGELOG.md"
   ],
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "^1.3.9"
   }
 }
