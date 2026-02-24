@@ -200,6 +200,8 @@ class NanoTermV2 {
         this.renderPending = false;
         this.lastRenderTime = 0;
         this.lastFont = null;
+        this.needsFullRedraw = true;
+        this.lastRenderedCursorY = -1;
 
         // Callbacks
         this.onResize = null;
@@ -259,9 +261,11 @@ class NanoTermV2 {
     }
 
     createEmptyLine() {
-        return Array.from({ length: this.cols }, () => ({
+        const line = Array.from({ length: this.cols }, () => ({
             char: ' ', fg: 256, bg: 256, flags: 0
         }));
+        line.dirty = true;
+        return line;
     }
 
     // -------------------------------------------------------------------------
@@ -269,6 +273,7 @@ class NanoTermV2 {
     // -------------------------------------------------------------------------
 
     resize() {
+        this.needsFullRedraw = true;
         const rect = this.container.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
 
@@ -790,6 +795,7 @@ class NanoTermV2 {
 
     switchToAlternateBuffer() {
         if (!this.useAlternate) {
+            this.needsFullRedraw = true;
             this.alternateBuffer = this.createBuffer(this.rows);
             this.useAlternate = true;
             this.scrollbackBuffer = [];
@@ -799,6 +805,7 @@ class NanoTermV2 {
 
     switchToPrimaryBuffer() {
         if (this.useAlternate) {
+            this.needsFullRedraw = true;
             this.useAlternate = false;
             this.scrollbackBuffer = [];
             this.scrollbackOffset = 0;
@@ -819,6 +826,7 @@ class NanoTermV2 {
             buffer[this.cursorY][this.cursorX] = {
                 char: c, fg: this.curFg, bg: this.curBg, flags: this.curFlags
             };
+            buffer[this.cursorY].dirty = true;
         }
         this.cursorX++;
         if (this.cursorX >= this.cols) {
@@ -846,6 +854,7 @@ class NanoTermV2 {
     }
 
     scrollUp(n = 1) {
+        this.needsFullRedraw = true;
         const buffer = this.getBuffer();
         const scrollTop = this.getScrollTop();
         const scrollBottom = this.getScrollBottom();
@@ -862,6 +871,7 @@ class NanoTermV2 {
     }
 
     scrollDown(n = 1) {
+        this.needsFullRedraw = true;
         const buffer = this.getBuffer();
         const scrollTop = this.getScrollTop();
         const scrollBottom = this.getScrollBottom();
@@ -872,6 +882,7 @@ class NanoTermV2 {
     }
 
     eraseDisplay(mode) {
+        this.needsFullRedraw = true;
         const buffer = this.getBuffer();
         switch (mode) {
             case 0:
@@ -908,6 +919,7 @@ class NanoTermV2 {
                 buffer[this.cursorY] = this.createEmptyLine();
                 break;
         }
+        buffer[this.cursorY].dirty = true;
     }
 
     eraseChars(n) {
@@ -916,6 +928,7 @@ class NanoTermV2 {
         for (let i = 0; i < n && this.cursorX + i < this.cols; i++) {
             row[this.cursorX + i] = { char: ' ', fg: 256, bg: 256, flags: 0 };
         }
+        row.dirty = true;
     }
 
     insertChars(n) {
@@ -925,6 +938,7 @@ class NanoTermV2 {
         for (let i = this.cursorX; i < this.cursorX + n && i < row.length; i++) {
             row[i] = { char: ' ', fg: 256, bg: 256, flags: 0 };
         }
+        row.dirty = true;
     }
 
     deleteChars(n) {
@@ -932,9 +946,11 @@ class NanoTermV2 {
         if (!row) return;
         for (let i = this.cursorX; i < row.length - n; i++) row[i] = row[i + n];
         for (let i = row.length - n; i < row.length; i++) row[i] = { char: ' ', fg: 256, bg: 256, flags: 0 };
+        row.dirty = true;
     }
 
     insertLines(n) {
+        this.needsFullRedraw = true;
         const buffer = this.getBuffer();
         const scrollBottom = this.getScrollBottom();
         for (let i = 0; i < n; i++) {
@@ -946,6 +962,7 @@ class NanoTermV2 {
     }
 
     deleteLines(n) {
+        this.needsFullRedraw = true;
         const buffer = this.getBuffer();
         const scrollBottom = this.getScrollBottom();
         for (let i = 0; i < n; i++) {
@@ -1004,9 +1021,6 @@ class NanoTermV2 {
         const height = this.canvas.height / (window.devicePixelRatio || 1);
         const pad = this.options.padding;
 
-        this.ctx.fillStyle = this.colors.background;
-        this.ctx.fillRect(0, 0, width, height);
-
         this.ctx.save();
         this.ctx.translate(pad, pad);
 
@@ -1037,15 +1051,39 @@ class NanoTermV2 {
             }
         }
 
-        // GLOBAL PASS 1: Draw ALL backgrounds first
-        for (const { row, screenY } of visibleRows) {
-            this.renderRowBg(row, screenY);
+        let activeCursorScreenY = -1;
+        if (!scrollbackVisible) {
+            activeCursorScreenY = this.cursorY;
+        } else {
+            const scrollbackRows = Math.min(this.scrollbackOffset, this.rows);
+            activeCursorScreenY = scrollbackRows + this.cursorY;
         }
 
-        // GLOBAL PASS 2: Draw ALL text and decorations on top
-        for (const { row, screenY } of visibleRows) {
-            this.renderRowText(row, screenY);
+        if (this.needsFullRedraw || this.selection) {
+            this.ctx.restore();
+            this.ctx.fillStyle = this.colors.background;
+            this.ctx.fillRect(0, 0, width, height);
+            this.ctx.save();
+            this.ctx.translate(pad, pad);
+
+            for (const { row, screenY } of visibleRows) {
+                this.renderRowBg(row, screenY);
+                this.renderRowText(row, screenY);
+                row.dirty = false;
+            }
+        } else {
+            for (const { row, screenY } of visibleRows) {
+                const isCursorRow = (screenY === activeCursorScreenY) || (screenY === this.lastRenderedCursorY);
+                if (row.dirty || isCursorRow) {
+                    this.renderRowBg(row, screenY);
+                    this.renderRowText(row, screenY);
+                    row.dirty = false;
+                }
+            }
         }
+
+        this.lastRenderedCursorY = activeCursorScreenY;
+        this.needsFullRedraw = false;
 
         if (this.selection) this.renderSelection();
         if (this.cursorVisible && this.focused) this.renderCursor();
@@ -1566,7 +1604,11 @@ class NanoTermV2 {
         } else {
             e.preventDefault();
             const delta = Math.round(e.deltaY / this.charHeight);
+            const oldOffset = this.scrollbackOffset;
             this.scrollbackOffset = Math.max(0, Math.min(this.scrollbackBuffer.length, this.scrollbackOffset + delta));
+            if (this.scrollbackOffset !== oldOffset) {
+                this.needsFullRedraw = true;
+            }
             this.triggerRender();
         }
     }
