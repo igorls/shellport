@@ -35,6 +35,12 @@ const RATE_LIMIT_MAX = 5;
 /** Rate limit sliding window in milliseconds */
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 
+/** Maximum message size in bytes (1MB) to prevent memory exhaustion */
+export const MAX_MESSAGE_SIZE = 1024 * 1024;
+
+/** Maximum number of tracked IPs in rate limiter to prevent memory exhaustion */
+export const MAX_TRACKED_IPS = 1000;
+
 /** Maximum terminal dimensions for resize validation */
 const MAX_COLS = 1000;
 const MAX_ROWS = 200;
@@ -93,12 +99,16 @@ function isLocalhost(hostname: string): boolean {
 }
 
 /** Sliding window rate limiter — tracks actual timestamps per IP */
-function checkRateLimit(ip: string): boolean {
+export function checkRateLimit(ip: string): boolean {
     const now = Date.now();
     const windowStart = now - RATE_LIMIT_WINDOW_MS;
     let timestamps = rateLimitMap.get(ip);
 
     if (!timestamps) {
+        if (rateLimitMap.size >= MAX_TRACKED_IPS) {
+            console.warn(`[ShellPort] ❌ Rate limit map full (${rateLimitMap.size}), rejecting ${ip}`);
+            return false;
+        }
         rateLimitMap.set(ip, [now]);
         return true;
     }
@@ -134,7 +144,7 @@ const SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
 };
 
-export async function startServer(config: ServerConfig): Promise<void> {
+export async function startServer(config: ServerConfig): Promise<ReturnType<typeof Bun.serve>> {
     const baseKey = config.secret ? await deriveKey(config.secret) : null;
     const safeEnv = buildSafeEnv();
 
@@ -174,7 +184,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     const htmlClient = buildHTML(getCryptoJS());
 
-    Bun.serve({
+    const server = Bun.serve({
         port: config.port,
 
         fetch(req, server) {
@@ -184,6 +194,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
                 const clientIP = server.requestIP(req)?.address || "unknown";
 
                 if (!checkRateLimit(clientIP)) {
+                    console.warn(`[ShellPort] ❌ Rate limit exceeded for ${clientIP}`);
                     return new Response("Too many requests", { status: 429 });
                 }
 
@@ -263,6 +274,15 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
             async message(ws, message) {
                 const sessionData = ws.data as unknown as SessionData;
+
+                const msgLen = typeof message === "string" ? Buffer.byteLength(message) : (message as ArrayBuffer).byteLength;
+
+                if (msgLen > MAX_MESSAGE_SIZE) {
+                    console.error(`[ShellPort] ❌ Message too large from ${sessionData.clientIP}: ${msgLen} bytes`);
+                    ws.close(1009, "Message too big");
+                    return;
+                }
+
                 const msgBuffer = message as unknown as ArrayBuffer;
 
                 // ─── TOTP verification pending ───
@@ -390,6 +410,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     // Start background cleanup task
     setInterval(cleanupRateLimits, CLEANUP_INTERVAL_MS).unref();
+
+    return server;
 }
 
 /**
