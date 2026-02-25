@@ -32,6 +32,9 @@ const TOTP_TIMEOUT_S = 60;
 /** Maximum rate limit attempts per window per IP */
 const RATE_LIMIT_MAX = 5;
 
+/** Maximum number of unique IPs to track (DoS prevention) */
+export const MAX_TRACKED_IPS = 1000;
+
 /** Rate limit sliding window in milliseconds */
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -93,12 +96,13 @@ function isLocalhost(hostname: string): boolean {
 }
 
 /** Sliding window rate limiter — tracks actual timestamps per IP */
-function checkRateLimit(ip: string): boolean {
+export function checkRateLimit(ip: string): boolean {
     const now = Date.now();
     const windowStart = now - RATE_LIMIT_WINDOW_MS;
     let timestamps = rateLimitMap.get(ip);
 
     if (!timestamps) {
+        if (rateLimitMap.size >= MAX_TRACKED_IPS) return false;
         rateLimitMap.set(ip, [now]);
         return true;
     }

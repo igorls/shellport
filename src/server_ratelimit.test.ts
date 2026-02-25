@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { rateLimitMap, cleanupRateLimits, RATE_LIMIT_WINDOW_MS } from "./server.js";
+import { rateLimitMap, cleanupRateLimits, RATE_LIMIT_WINDOW_MS, checkRateLimit, MAX_TRACKED_IPS } from "./server.js";
 
 describe("Rate Limit Cleanup", () => {
     afterEach(() => {
@@ -41,5 +41,44 @@ describe("Rate Limit Cleanup", () => {
         cleanupRateLimits();
 
         expect(rateLimitMap.has("10.0.0.4")).toBe(true);
+    });
+});
+
+describe("Max Tracked IPs Limit", () => {
+    afterEach(() => {
+        rateLimitMap.clear();
+    });
+
+    test("allows new IPs when map is not full", () => {
+        rateLimitMap.clear();
+        expect(checkRateLimit("1.1.1.1")).toBe(true);
+        expect(rateLimitMap.has("1.1.1.1")).toBe(true);
+    });
+
+    test("rejects new IPs when map is full", () => {
+        // Fill the map to the limit
+        for (let i = 0; i < MAX_TRACKED_IPS; i++) {
+            rateLimitMap.set(`10.0.0.${i}`, [Date.now()]);
+        }
+
+        expect(rateLimitMap.size).toBe(MAX_TRACKED_IPS);
+
+        // Try to add one more
+        expect(checkRateLimit("9.9.9.9")).toBe(false);
+        expect(rateLimitMap.has("9.9.9.9")).toBe(false);
+        expect(rateLimitMap.size).toBe(MAX_TRACKED_IPS);
+    });
+
+    test("allows existing IPs even when map is full", () => {
+        // Fill the map
+        for (let i = 0; i < MAX_TRACKED_IPS; i++) {
+            rateLimitMap.set(`10.0.0.${i}`, [Date.now()]);
+        }
+
+        // Access an existing IP
+        const existingIP = "10.0.0.0";
+        expect(checkRateLimit(existingIP)).toBe(true);
+        // Should have updated timestamp
+        expect(rateLimitMap.get(existingIP)?.length).toBe(2);
     });
 });
