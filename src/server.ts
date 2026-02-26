@@ -32,6 +32,9 @@ const TOTP_TIMEOUT_S = 60;
 /** Maximum rate limit attempts per window per IP */
 const RATE_LIMIT_MAX = 5;
 
+/** Maximum allowed message size (1MB) to prevent memory exhaustion */
+export const MAX_MESSAGE_SIZE = 1024 * 1024;
+
 /** Rate limit sliding window in milliseconds */
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -134,7 +137,7 @@ const SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
 };
 
-export async function startServer(config: ServerConfig): Promise<void> {
+export async function startServer(config: ServerConfig): Promise<import("bun").Server> {
     const baseKey = config.secret ? await deriveKey(config.secret) : null;
     const safeEnv = buildSafeEnv();
 
@@ -174,7 +177,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     const htmlClient = buildHTML(getCryptoJS());
 
-    Bun.serve({
+    const server = Bun.serve({
         port: config.port,
 
         fetch(req, server) {
@@ -263,6 +266,15 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
             async message(ws, message) {
                 const sessionData = ws.data as unknown as SessionData;
+
+                // Security: Prevent memory exhaustion DoS
+                const size = typeof message === "string" ? message.length : (message as any).byteLength || (message as any).length || 0;
+                if (size > MAX_MESSAGE_SIZE) {
+                    console.warn(`[ShellPort] ⚠️  Rejected large message (${size} bytes) from ${sessionData.clientIP}`);
+                    ws.close(1009, "Message too big");
+                    return;
+                }
+
                 const msgBuffer = message as unknown as ArrayBuffer;
 
                 // ─── TOTP verification pending ───
@@ -390,6 +402,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     // Start background cleanup task
     setInterval(cleanupRateLimits, CLEANUP_INTERVAL_MS).unref();
+
+    return server;
 }
 
 /**
