@@ -137,7 +137,7 @@ const SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
 };
 
-export async function startServer(config: ServerConfig): Promise<import("bun").Server> {
+export async function startServer(config: ServerConfig): Promise<import("bun").Server<SessionData>> {
     const baseKey = config.secret ? await deriveKey(config.secret) : null;
     const safeEnv = buildSafeEnv();
 
@@ -177,7 +177,7 @@ export async function startServer(config: ServerConfig): Promise<import("bun").S
 
     const htmlClient = buildHTML(getCryptoJS());
 
-    const server = Bun.serve({
+    const server = Bun.serve<SessionData>({
         port: config.port,
 
         fetch(req, server) {
@@ -220,7 +220,7 @@ export async function startServer(config: ServerConfig): Promise<import("bun").S
                     clientIP,
                 };
 
-                if (server.upgrade(req, { data: data as unknown as undefined, headers: { "Sec-WebSocket-Protocol": `shellport-v${PROTOCOL_VERSION}` } })) {
+                if (server.upgrade(req, { data: data, headers: { "Sec-WebSocket-Protocol": `shellport-v${PROTOCOL_VERSION}` } })) {
                     return;
                 }
                 return new Response("Expected WebSocket", { status: 400 });

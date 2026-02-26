@@ -6,7 +6,7 @@ import { ServerConfig } from "./types.js";
 const TEST_PORT = 18681 + Math.floor(Math.random() * 1000);
 
 describe("Server Security Limits", () => {
-    let server: import("bun").Server;
+    let server: import("bun").Server<any>;
 
     beforeAll(async () => {
         const config: ServerConfig = {
