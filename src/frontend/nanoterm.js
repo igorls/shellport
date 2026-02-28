@@ -1061,8 +1061,12 @@ class NanoTermV2 {
             const cell = row[col];
             const cellBg = this.resolveRowBg(cell, cell?.flags ?? 0);
             if (cellBg !== currentBgColor || col === this.cols) {
-                this.ctx.fillStyle = currentBgColor;
-                this.ctx.fillRect(bgStart * this.charWidth, baseline, (col - bgStart) * this.charWidth, this.charHeight);
+                // Optimization: Don't draw the background if it's the default background color
+                // because the entire canvas is already cleared to this color each frame.
+                if (currentBgColor !== this.colors.background && col > bgStart) {
+                    this.ctx.fillStyle = currentBgColor;
+                    this.ctx.fillRect(bgStart * this.charWidth, baseline, (col - bgStart) * this.charWidth, this.charHeight);
+                }
                 bgStart = col;
                 currentBgColor = cellBg;
             }
