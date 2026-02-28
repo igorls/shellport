@@ -57,6 +57,12 @@ const LOCALHOST_ADDRESSES = ['localhost', '127.0.0.1', '::1', '0.0.0.0', '::'];
 /** Shells considered safe for PTY spawning */
 const SAFE_SHELLS = ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/sh', '/usr/bin/zsh', '/usr/bin/fish', '/usr/local/bin/bash', '/usr/local/bin/zsh', '/usr/local/bin/fish', 'bash', 'sh', 'zsh', 'fish'];
 
+/** Maximum unique IPs to track for rate limiting to prevent memory exhaustion */
+export const MAX_TRACKED_IPS = 1000;
+
+/** Maximum WebSocket message size (1MB) to prevent memory exhaustion */
+export const MAX_MESSAGE_SIZE = 1024 * 1024;
+
 /** Rate limit tracker: IP -> sliding window of timestamps */
 export const rateLimitMap = new Map<string, number[]>();
 
@@ -99,6 +105,10 @@ function checkRateLimit(ip: string): boolean {
     let timestamps = rateLimitMap.get(ip);
 
     if (!timestamps) {
+        if (rateLimitMap.size >= MAX_TRACKED_IPS) {
+            console.warn(`[ShellPort] Rate limit map full. Rejecting new IP: ${ip}`);
+            return false;
+        }
         rateLimitMap.set(ip, [now]);
         return true;
     }
@@ -262,6 +272,14 @@ export async function startServer(config: ServerConfig): Promise<void> {
             },
 
             async message(ws, message) {
+                // Prevent memory exhaustion DoS via massive frames
+                const msgLen = typeof message === "string" ? message.length : message.byteLength || (message as any).length;
+                if (msgLen > MAX_MESSAGE_SIZE) {
+                    console.warn(`[ShellPort] Received oversized message (${msgLen} bytes). Closing connection.`);
+                    ws.close(1009, "Message Too Big");
+                    return;
+                }
+
                 const sessionData = ws.data as unknown as SessionData;
                 const msgBuffer = message as unknown as ArrayBuffer;
 
