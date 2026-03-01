@@ -35,6 +35,9 @@ const RATE_LIMIT_MAX = 5;
 /** Rate limit sliding window in milliseconds */
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 
+/** Maximum allowed incoming WebSocket message size in bytes (1MB) to prevent memory exhaustion DoS */
+export const MAX_MESSAGE_SIZE = 1048576;
+
 /** Maximum terminal dimensions for resize validation */
 const MAX_COLS = 1000;
 const MAX_ROWS = 200;
@@ -174,7 +177,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     const htmlClient = buildHTML(getCryptoJS());
 
-    Bun.serve({
+    const serverInstance = Bun.serve({
         port: config.port,
 
         fetch(req, server) {
@@ -262,8 +265,17 @@ export async function startServer(config: ServerConfig): Promise<void> {
             },
 
             async message(ws, message) {
-                const sessionData = ws.data as unknown as SessionData;
                 const msgBuffer = message as unknown as ArrayBuffer;
+
+                // Enforce message size limit (DoS protection)
+                const size = typeof message === 'string' ? message.length : (msgBuffer.byteLength || (msgBuffer as any).length);
+                if (size > MAX_MESSAGE_SIZE) {
+                    console.error(`[ShellPort] ❌ Dropping connection from ${((ws.data as unknown) as SessionData).clientIP}: message size ${size} exceeds limit of ${MAX_MESSAGE_SIZE} bytes.`);
+                    ws.close(1009, "Message Too Big"); // 1009 = Message Too Big
+                    return;
+                }
+
+                const sessionData = ws.data as unknown as SessionData;
 
                 // ─── TOTP verification pending ───
                 if (sessionData.totpPending && config.totp && config.totpSecret) {
@@ -390,6 +402,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     // Start background cleanup task
     setInterval(cleanupRateLimits, CLEANUP_INTERVAL_MS).unref();
+
+    return serverInstance as any;
 }
 
 /**
