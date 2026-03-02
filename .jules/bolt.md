@@ -1,0 +1,3 @@
+## 2024-05-20 - NanoTermV2 Canvas Rendering Bottlenecks
+**Learning:** The terminal emulator Canvas rendering loop (`renderRunText`) suffers from performance issues due to repeated dynamic string allocations for font styles (e.g. `['bold', '14px', 'monospace'].join(' ')`) on every single run of text that changes style. This causes unnecessary GC pressure and canvas API overhead in the tight loop. Also learned that skipping background overdraws by comparing computed background to canvas default can cause text ghosting during dirty-cell updates if cells aren't properly cleared first.
+**Action:** Memoize font strings based on `fontSize`, `fontFamily`, and bitmask flags (`ATTR.BOLD | ATTR.ITALIC`) to eliminate dynamic string creation in the render loop.
