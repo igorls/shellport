@@ -13,7 +13,7 @@
  * - TOTP 2FA authentication (RFC 6238)
  */
 
-import { spawn, spawnSync } from "bun";
+import { spawn, spawnSync, type Server } from "bun";
 import { deriveKey, pack, unpack, getCryptoJS, generateNonce, deriveSessionSalt, PROTOCOL_VERSION } from "./crypto.js";
 import { SeqQueue, FrameType } from "./types.js";
 import type { ServerConfig, SessionData } from "./types.js";
@@ -34,6 +34,12 @@ const RATE_LIMIT_MAX = 5;
 
 /** Rate limit sliding window in milliseconds */
 export const RATE_LIMIT_WINDOW_MS = 60_000;
+
+/** Maximum number of IPs to track for rate limiting */
+export const MAX_TRACKED_IPS = 1000;
+
+/** Maximum WebSocket message size (1MB) */
+export const MAX_MESSAGE_SIZE = 1024 * 1024;
 
 /** Maximum terminal dimensions for resize validation */
 const MAX_COLS = 1000;
@@ -99,6 +105,9 @@ function checkRateLimit(ip: string): boolean {
     let timestamps = rateLimitMap.get(ip);
 
     if (!timestamps) {
+        if (rateLimitMap.size >= MAX_TRACKED_IPS) {
+            return false;
+        }
         rateLimitMap.set(ip, [now]);
         return true;
     }
@@ -134,7 +143,7 @@ const SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
 };
 
-export async function startServer(config: ServerConfig): Promise<void> {
+export async function startServer(config: ServerConfig): Promise<Server> {
     const baseKey = config.secret ? await deriveKey(config.secret) : null;
     const safeEnv = buildSafeEnv();
 
@@ -174,7 +183,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     const htmlClient = buildHTML(getCryptoJS());
 
-    Bun.serve({
+    const serverInstance = Bun.serve({
         port: config.port,
 
         fetch(req, server) {
@@ -233,6 +242,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         },
 
         websocket: {
+            maxPayloadLength: MAX_MESSAGE_SIZE,
             open(ws) {
                 const sessionData = ws.data as unknown as SessionData;
 
@@ -263,6 +273,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
             async message(ws, message) {
                 const sessionData = ws.data as unknown as SessionData;
+
                 const msgBuffer = message as unknown as ArrayBuffer;
 
                 // ─── TOTP verification pending ───
@@ -389,7 +400,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
     console.log(`[ShellPort] 🔒 Protocol version: v${PROTOCOL_VERSION}`);
 
     // Start background cleanup task
-    setInterval(cleanupRateLimits, CLEANUP_INTERVAL_MS).unref();
+    const cleanupTimer = setInterval(cleanupRateLimits, CLEANUP_INTERVAL_MS);
+    cleanupTimer.unref();
+
+    // Attach timer to server instance so tests can clear it
+    (serverInstance as any)._cleanupTimer = cleanupTimer;
+
+    return serverInstance;
 }
 
 /**
