@@ -143,7 +143,7 @@ const SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
 };
 
-export async function startServer(config: ServerConfig): Promise<Server> {
+export async function startServer(config: ServerConfig): Promise<Server<any>> {
     const baseKey = config.secret ? await deriveKey(config.secret) : null;
     const safeEnv = buildSafeEnv();
 

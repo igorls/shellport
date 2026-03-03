@@ -16,6 +16,7 @@ describe("Security Limits", () => {
             totpSecret: "DUMMYSECRET",
             requireApproval: false,
             allowLocalhost: true,
+            tailscale: "",
         });
     });
 
