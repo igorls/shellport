@@ -200,6 +200,7 @@ class NanoTermV2 {
         this.renderPending = false;
         this.lastRenderTime = 0;
         this.lastFont = null;
+        this.fontCache = new Map(); // Cache to prevent array allocations per render run
 
         // Callbacks
         this.onResize = null;
@@ -284,6 +285,7 @@ class NanoTermV2 {
         this.canvas.style.height = rect.height + 'px';
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.lastFont = null;
+        this.fontCache.clear();
 
         this.resizeBuffer(this.primaryBuffer);
         if (this.alternateBuffer.length > 0) {
@@ -1122,13 +1124,20 @@ class NanoTermV2 {
         const textColor = (flags & ATTR.INVERSE) ? this.getColor(bg) : this.getColor(fg);
         this.ctx.fillStyle = textColor;
 
-        // Font style
-        const fontParts = [];
-        if (flags & ATTR.BOLD) fontParts.push('bold');
-        if (flags & ATTR.ITALIC) fontParts.push('italic');
-        fontParts.push(`${this.options.fontSize}px`);
-        fontParts.push(this.options.fontFamily);
-        const fontString = fontParts.join(' ');
+        // Font style optimization: use a bitmask key to memoize the font string
+        // This avoids array allocations and .join() calls for every run
+        const fontKey = flags & (ATTR.BOLD | ATTR.ITALIC);
+        let fontString = this.fontCache.get(fontKey);
+
+        if (!fontString) {
+            const fontParts = [];
+            if (flags & ATTR.BOLD) fontParts.push('bold');
+            if (flags & ATTR.ITALIC) fontParts.push('italic');
+            fontParts.push(`${this.options.fontSize}px`);
+            fontParts.push(this.options.fontFamily);
+            fontString = fontParts.join(' ');
+            this.fontCache.set(fontKey, fontString);
+        }
 
         if (this.lastFont !== fontString) {
             this.ctx.font = fontString;

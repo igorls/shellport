@@ -1,0 +1,3 @@
+## 2024-05-24 - Canvas Font String Memoization
+**Learning:** In a high-frequency Canvas rendering loop (like a terminal emulator), generating font configuration strings (e.g., `'bold 14px monospace'`) via array creation and `.join(' ')` per run creates massive amounts of temporary objects. This causes rapid memory accumulation and frequent Garbage Collection pauses, which causes frame drops.
+**Action:** Always memoize Canvas font strings using a primitive key (like a bitmask of style flags). The cache can be small and cleared when global variables like font size change (e.g., on resize).
