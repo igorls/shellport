@@ -103,16 +103,17 @@ function checkRateLimit(ip: string): boolean {
         return true;
     }
 
-    // Prune timestamps outside the window
-    timestamps = timestamps.filter(t => t > windowStart);
+    // ⚡ Bolt: Fast path pruning — avoid O(n) array allocation via filter()
+    // Since timestamps are appended in order, we can just shift the oldest ones.
+    while (timestamps.length > 0 && timestamps[0] <= windowStart) {
+        timestamps.shift();
+    }
 
     if (timestamps.length >= RATE_LIMIT_MAX) {
-        rateLimitMap.set(ip, timestamps);
         return false;
     }
 
     timestamps.push(now);
-    rateLimitMap.set(ip, timestamps);
     return true;
 }
 
