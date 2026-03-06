@@ -96,23 +96,23 @@ function isLocalhost(hostname: string): boolean {
 function checkRateLimit(ip: string): boolean {
     const now = Date.now();
     const windowStart = now - RATE_LIMIT_WINDOW_MS;
-    let timestamps = rateLimitMap.get(ip);
+    const timestamps = rateLimitMap.get(ip);
 
     if (!timestamps) {
         rateLimitMap.set(ip, [now]);
         return true;
     }
 
-    // Prune timestamps outside the window
-    timestamps = timestamps.filter(t => t > windowStart);
+    // Prune timestamps outside the window (in-place to avoid allocation, ordered by time)
+    while (timestamps.length > 0 && timestamps[0] <= windowStart) {
+        timestamps.shift();
+    }
 
     if (timestamps.length >= RATE_LIMIT_MAX) {
-        rateLimitMap.set(ip, timestamps);
         return false;
     }
 
     timestamps.push(now);
-    rateLimitMap.set(ip, timestamps);
     return true;
 }
 
