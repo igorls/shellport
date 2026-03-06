@@ -35,6 +35,9 @@ const RATE_LIMIT_MAX = 5;
 /** Rate limit sliding window in milliseconds */
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 
+/** Maximum WebSocket message size (1MB) to prevent memory exhaustion DoS */
+export const MAX_MESSAGE_SIZE = 1024 * 1024;
+
 /** Maximum terminal dimensions for resize validation */
 const MAX_COLS = 1000;
 const MAX_ROWS = 200;
@@ -233,6 +236,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
         },
 
         websocket: {
+            // Prevent memory exhaustion DoS attacks by restricting the max payload size
+            maxPayloadLength: MAX_MESSAGE_SIZE,
+
             open(ws) {
                 const sessionData = ws.data as unknown as SessionData;
 
