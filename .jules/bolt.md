@@ -1,0 +1,3 @@
+## 2024-05-18 - Canvas rendering optimization in inner loops
+**Learning:** During continuous stream rendering on a Canvas (like in a terminal emulator), performing string operations like `[].join(' ')` within the inner render loop (`renderRunText`) can create significant garbage collection pressure, leading to frame drops.
+**Action:** Always memoize derived strings or configurations (like `ctx.font`) where the input values (like bitmask flags) can be used as simple cache keys. Clear the cache during events that invalidate the context, such as `resize`.

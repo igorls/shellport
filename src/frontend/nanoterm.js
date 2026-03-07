@@ -200,6 +200,7 @@ class NanoTermV2 {
         this.renderPending = false;
         this.lastRenderTime = 0;
         this.lastFont = null;
+        this.fontCache = {};
 
         // Callbacks
         this.onResize = null;
@@ -284,6 +285,7 @@ class NanoTermV2 {
         this.canvas.style.height = rect.height + 'px';
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.lastFont = null;
+        this.fontCache = {};
 
         this.resizeBuffer(this.primaryBuffer);
         if (this.alternateBuffer.length > 0) {
@@ -1123,12 +1125,17 @@ class NanoTermV2 {
         this.ctx.fillStyle = textColor;
 
         // Font style
-        const fontParts = [];
-        if (flags & ATTR.BOLD) fontParts.push('bold');
-        if (flags & ATTR.ITALIC) fontParts.push('italic');
-        fontParts.push(`${this.options.fontSize}px`);
-        fontParts.push(this.options.fontFamily);
-        const fontString = fontParts.join(' ');
+        const fontStyleFlags = flags & (ATTR.BOLD | ATTR.ITALIC);
+        let fontString = this.fontCache[fontStyleFlags];
+        if (!fontString) {
+            const fontParts = [];
+            if (flags & ATTR.BOLD) fontParts.push('bold');
+            if (flags & ATTR.ITALIC) fontParts.push('italic');
+            fontParts.push(`${this.options.fontSize}px`);
+            fontParts.push(this.options.fontFamily);
+            fontString = fontParts.join(' ');
+            this.fontCache[fontStyleFlags] = fontString;
+        }
 
         if (this.lastFont !== fontString) {
             this.ctx.font = fontString;
