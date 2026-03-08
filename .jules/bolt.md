@@ -1,0 +1,3 @@
+## 2024-03-08 - Font String Allocation in Hot Render Loop
+**Learning:** In the Canvas 2D render loop, dynamically building font strings (e.g. `['bold', '14px', 'monospace'].join(' ')`) on every call to `renderRunText` causes significant array allocation and garbage collection (GC) pressure. This slows down rendering during rapid terminal updates.
+**Action:** Memoize font strings using a map cache. Since the terminal font size and family are fixed per session (or changed only on resize), use the text style attribute bitmask (`flags & (ATTR.BOLD | ATTR.ITALIC)`) as the cache key to fetch pre-computed font strings instantly, and clear the cache when the canvas resizes.
