@@ -1,0 +1,3 @@
+## 2024-05-14 - Initialize Large Dense Arrays with loops instead of Array.from
+**Learning:** In V8 environments (like Bun), initializing large dense arrays with objects (e.g., terminal buffers in `NanoTermV2`) using `Array.from()` with a mapping function incurs a significant performance penalty (approx 2-3x slower) compared to `new Array(size)` populated via a `for` loop.
+**Action:** When creating large arrays in hot paths (like terminal buffer creation during initialization, scrolling, or erasing lines), explicitly use `new Array(size)` and a `for` loop to optimize execution time and minimize garbage collection.

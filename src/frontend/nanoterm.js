@@ -259,9 +259,15 @@ class NanoTermV2 {
     }
 
     createEmptyLine() {
-        return Array.from({ length: this.cols }, () => ({
-            char: ' ', fg: 256, bg: 256, flags: 0
-        }));
+        // Optimization: Use `new Array` with a loop instead of `Array.from`.
+        // This is significantly faster in V8 and generates less garbage in hot paths
+        // (initialization, resizing, scrolling).
+        const cols = this.cols;
+        const line = new Array(cols);
+        for (let i = 0; i < cols; i++) {
+            line[i] = { char: ' ', fg: 256, bg: 256, flags: 0 };
+        }
+        return line;
     }
 
     // -------------------------------------------------------------------------
