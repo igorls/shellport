@@ -201,6 +201,9 @@ class NanoTermV2 {
         this.lastRenderTime = 0;
         this.lastFont = null;
 
+        // Resize debounce
+        this._resizeDebounceTimer = null;
+
         // Callbacks
         this.onResize = null;
         this.onTitle = null;
@@ -213,6 +216,17 @@ class NanoTermV2 {
         this.setupEvents();
         this.startCursorBlink();
         this.canvas.focus();
+
+        // Re-measure after web font loads (fixes spaced-out text on first render)
+        if (document.fonts && document.fonts.ready) {
+            document.fonts.ready.then(() => {
+                const oldWidth = this.charWidth;
+                this.measureChar();
+                if (this.charWidth !== oldWidth) {
+                    this.resize();
+                }
+            });
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -295,8 +309,13 @@ class NanoTermV2 {
             this.tabStops.add(i);
         }
 
+        // Debounce the onResize callback to avoid flooding the PTY
+        // during continuous drag-resize
         if (this.onResize) {
-            this.onResize(this.cols, this.rows);
+            clearTimeout(this._resizeDebounceTimer);
+            this._resizeDebounceTimer = setTimeout(() => {
+                this.onResize(this.cols, this.rows);
+            }, 150);
         }
 
         this.triggerRender();
