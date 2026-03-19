@@ -217,15 +217,18 @@ class NanoTermV2 {
         this.startCursorBlink();
         this.canvas.focus();
 
-        // Re-measure after web font loads (fixes spaced-out text on first render)
-        if (document.fonts && document.fonts.ready) {
-            document.fonts.ready.then(() => {
+        // Explicitly load the specified font and re-measure once available.
+        // document.fonts.ready resolves immediately if no fonts are loading,
+        // but document.fonts.load() forces the browser to load the exact font.
+        if (document.fonts && document.fonts.load) {
+            const fontSpec = `${this.options.fontSize}px ${this.options.fontFamily}`;
+            document.fonts.load(fontSpec).then(() => {
                 const oldWidth = this.charWidth;
                 this.measureChar();
                 if (this.charWidth !== oldWidth) {
                     this.resize();
                 }
-            });
+            }).catch(() => { /* font not available, fallback is fine */ });
         }
     }
 
