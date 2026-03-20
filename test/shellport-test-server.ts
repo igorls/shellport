@@ -60,6 +60,7 @@ const server = Bun.serve({
                     ...process.env,
                     TERM: 'xterm-256color',
                     COLORTERM: 'truecolor',
+                    TERM_PROGRAM: 'WezTerm',
                 },
                 terminal: {
                     cols: 120,

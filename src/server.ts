@@ -88,6 +88,7 @@ function buildSafeEnv(): Record<string, string> {
     }
     env.TERM = "xterm-256color";
     env.COLORTERM = "truecolor";
+    env.TERM_PROGRAM = "WezTerm";
     return env;
 }
 

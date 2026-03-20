@@ -81,7 +81,7 @@ const BOX_DRAWING_SEGMENTS = [
     [3, 3, 0, 1], [1, 1, 0, 3], [3, 3, 0, 3],             // 2564-2566 ╤╥╦
     [3, 3, 1, 0], [1, 1, 3, 0], [3, 3, 3, 0],             // 2567-2569 ╧╨╩
     [3, 3, 1, 1], [1, 1, 3, 3], [3, 3, 3, 3],             // 256A-256C ╪╫╬
-    [0, 1, 0, 1], [1, 0, 0, 1], [1, 0, 1, 0], [0, 1, 1, 0],   // 256D-2570 ╭╮╯╰
+    null, null, null, null,                                       // 256D-2570 ╭╮╯╰ (font-rendered curves)
     null, null, null,                            // 2571-2573 ╱╲╳ (diagonals)
     [1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1],   // 2574-2577 ╴╵╶╷
     [2, 0, 0, 0], [0, 0, 2, 0], [0, 2, 0, 0], [0, 0, 0, 2],   // 2578-257B ╸╹╺╻
@@ -1259,7 +1259,8 @@ class NanoTermV2 {
     resolveRowBg(cell, flags) {
         const fg = cell?.fg ?? 256;
         const bg = cell?.bg ?? 256;
-        if (flags & ATTR.INVERSE) return this.getColor(fg);
+        // For inverse, map default fg (256) to theme foreground color
+        if (flags & ATTR.INVERSE) return fg === 256 ? this.colors.foreground : this.getColor(fg);
         if (bg !== 256) return this.getColor(bg);
         return this.colors.background;
     }
@@ -1280,8 +1281,10 @@ class NanoTermV2 {
             return;
         }
 
-        // Text color
-        const textColor = (flags & ATTR.INVERSE) ? this.getColor(bg) : this.getColor(fg);
+        // Text color — for inverse, map default bg (256) to theme background
+        const textColor = (flags & ATTR.INVERSE)
+            ? (bg === 256 ? this.colors.background : this.getColor(bg))
+            : this.getColor(fg);
         this.ctx.fillStyle = textColor;
 
         // Font style
@@ -1360,31 +1363,31 @@ class NanoTermV2 {
         const h = this.charHeight;
         this.ctx.fillStyle = color;
 
-        // Full block U+2588
-        if (code === 0x2588) { this.ctx.fillRect(x, y, w, h); return true; }
+        // Full block U+2588 (+0.5px overdraw to crush subpixel seams)
+        if (code === 0x2588) { this.ctx.fillRect(x, y, w + 0.5, h + 0.5); return true; }
 
         // Upper half block U+2580
-        if (code === 0x2580) { this.ctx.fillRect(x, y, w, Math.ceil(h / 2)); return true; }
+        if (code === 0x2580) { this.ctx.fillRect(x, y, w + 0.5, Math.ceil(h / 2)); return true; }
 
         // Lower blocks U+2581-U+2587 (1/8 to 7/8 from bottom)
         if (code >= 0x2581 && code <= 0x2587) {
             const frac = (code - 0x2580) / 8;
             const bh = Math.round(h * frac);
-            this.ctx.fillRect(x, y + h - bh, w, bh);
+            this.ctx.fillRect(x, y + h - bh, w + 0.5, bh + 0.5);
             return true;
         }
 
         // Left blocks U+2589-U+258F (7/8 to 1/8 from left)
         if (code >= 0x2589 && code <= 0x258F) {
             const frac = (0x2590 - code) / 8;
-            this.ctx.fillRect(x, y, Math.round(w * frac), h);
+            this.ctx.fillRect(x, y, Math.round(w * frac) + 0.5, h + 0.5);
             return true;
         }
 
         // Right half block U+2590
         if (code === 0x2590) {
             const hw = Math.floor(w / 2);
-            this.ctx.fillRect(x + hw, y, w - hw, h);
+            this.ctx.fillRect(x + hw, y, w - hw + 0.5, h + 0.5);
             return true;
         }
 
@@ -1392,7 +1395,7 @@ class NanoTermV2 {
         if (code >= 0x2591 && code <= 0x2593) {
             const alpha = [0.25, 0.50, 0.75][code - 0x2591];
             this.ctx.globalAlpha = alpha;
-            this.ctx.fillRect(x, y, w, h);
+            this.ctx.fillRect(x, y, w + 0.5, h + 0.5);
             this.ctx.globalAlpha = 1;
             return true;
         }
