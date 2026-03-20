@@ -1171,6 +1171,9 @@ class NanoTermV2 {
 
         this.ctx.save();
         this.ctx.translate(pad, pad);
+        // Invalidate font cache: ctx.restore() at end of each frame resets
+        // the canvas font, so lastFont from the previous frame is stale
+        this.lastFont = null;
 
         const buffer = this.getBuffer();
         const scrollbackVisible = this.scrollbackOffset > 0 && !this.useAlternate;
@@ -1531,10 +1534,19 @@ class NanoTermV2 {
                     const cell = buffer[this.cursorY]?.[this.cursorX];
                     if (cell && cell.char !== ' ') {
                         this.ctx.fillStyle = this.colors.background;
-                        this.ctx.font = `${this.options.fontSize}px ${this.options.fontFamily}`;
+                        // Build font string respecting cell's SGR flags (bold/italic)
+                        const cursorFontParts = [];
+                        if (cell.flags & ATTR.BOLD) cursorFontParts.push('bold');
+                        if (cell.flags & ATTR.ITALIC) cursorFontParts.push('italic');
+                        cursorFontParts.push(`${this.options.fontSize}px`);
+                        cursorFontParts.push(this.options.fontFamily);
+                        this.ctx.font = cursorFontParts.join(' ');
                         this.ctx.textBaseline = 'top';
                         this.ctx.fillText(cell.char, x, adjustedY);
                     }
+                    // Invalidate font cache — renderCursor changed ctx.font
+                    // without going through the renderRunText caching path
+                    this.lastFont = null;
                 }
                 break;
         }
