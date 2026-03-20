@@ -1,0 +1,1 @@
+import{_ as e,o as t,c as r}from"./chunks/framework.Dn0B0GT3.js";const d=JSON.parse('{"title":"","description":"","frontmatter":{},"headers":[],"relativePath":"webgl_review-2.md","filePath":"webgl_review-2.md"}'),a={name:"webgl_review-2.md"};function o(s,c,n,_,i,l){return t(),r("div")}const m=e(a,[["render",o]]);export{d as __pageData,m as default};

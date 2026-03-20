@@ -1,124 +1,93 @@
-# Architecture Review — NanoTermV2 WebGL/WebGPU Rendering Backend
+# Rendering Fidelity & Bug Hunt Review — NanoTermV2 WebGL Renderer (Round 2)
 
 ## Project Context
 
-**ShellPort** is a zero-dependency, browser-based terminal emulator library called **NanoTermV2**. It renders a full VT100/VT220/xterm-compatible terminal into an HTML `<canvas>` element using the Canvas2D API. The library is designed to be embedded in web applications to provide SSH/PTY access over WebSocket.
+NanoTermV2 is a zero-dependency, GPU-accelerated terminal emulator in vanilla JavaScript. It renders to `<canvas>` using WebGL2 with automatic fallback to Canvas2D. The project is split into ES modules bundled via Bun at build time.
 
-### Current Architecture
+**Architecture:**
+- `index.js` — Full VT100/xterm emulator core (SGR, CSI, OSC, DCS, scrollback, selection, clipboard, cursor)
+- `webgl-renderer.js` — WebGL2 primary renderer: full-screen quad, GLSL fragment shader, RGBA32UI data textures, dynamic glyph atlas, procedural box drawing / braille / block chars
+- `canvas-renderer.js` — Canvas2D fallback renderer
+- `constants.js` — Shared constants including the `BOX_DRAWING_SEGMENTS` table
 
-The entire renderer lives in `nanoterm.js` (~1800 lines). Key architectural elements:
-
-- **Buffer Model**: Per-cell objects `{ char, fg, bg, flags }` stored in `Array<Array<Cell>>` — one array per row, one object per column. Primary and alternate screen buffers with scrollback.
-- **Rendering Pipeline**: Two-pass Canvas2D rendering triggered via `requestAnimationFrame`:
-  - Pass 1 (`renderRowBg`): Draws all background rectangles with run-length batching (coalesces consecutive cells with the same background color into single `fillRect` calls).
-  - Pass 2 (`renderRowText`): Draws all text and decorations, also with attribute-run batching. Uses `fillText` for each character individually at precise cell coordinates to prevent subpixel drift.
-- **Programmatic Unicode Rendering**: Block elements (U+2580–U+259F), box-drawing characters (U+2500–U+257F), and braille patterns (U+2800–U+28FF) are rendered programmatically using `fillRect` rather than font glyphs. This uses a detailed segment table for box-drawing with support for light, heavy, and double line weights.
-- **Glyph Probing**: A pixel-comparison system that renders characters to a hidden canvas and compares against a known "tofu" signature (U+FFFF) to detect missing glyphs. Results are cached per codepoint. Private Use Area availability is batch-detected.
-- **DPR Handling**: High-DPI support via `window.devicePixelRatio`, scaling the canvas backing store and using `setTransform` for logical-to-physical coordinate mapping.
-- **Font Management**: Fractional `charWidth` for subpixel text placement, font caching via `lastFont` string comparison.
-
-### Known Rendering Challenges (from recent audits)
-
-1. **Subpixel seams**: Block characters need `+0.5px` overdraw to prevent visible gaps between adjacent cells
-2. **Rounded corners**: Box-drawing characters at U+256D–U+2570 fall back to font rendering (curves can't be expressed as horizontal/vertical segments)
-3. **SGR inversion**: Correct inverse color mapping for default fg/bg sentinel values (256/257)
-4. **Per-character fillText**: Each glyph is drawn individually — no text run batching possible due to proportional-width prevention
-5. **Full redraw on every frame**: No dirty-region tracking; the entire visible buffer is re-rendered every `requestAnimationFrame`
+**Critical context:** The WebGL renderer was **never actually running** until this session. A null crash in `_uploadBoxTexture()` (null entries in `BOX_DRAWING_SEGMENTS` for rounded corners) silently fell back to Canvas2D. This means the WebGL shader code has had zero real-world testing until now.
 
 ## Review Scope
 
-**The Canvas2D renderer already works very well.** It produces correct, visually faithful output for the full VT100/VT220/xterm feature set including programmatic Unicode rendering. This is not a "fix what's broken" exercise.
+Round 2 focused stability + correctness review. The renderer now initializes successfully but has visible rendering artifacts:
 
-Our ambition is to make NanoTermV2 **the most performant, yet lightweight, web terminal ever built** — maintaining the **zero-dependency philosophy** while pushing rendering to the hardware limit. We want to introduce a **WebGL2** (and optionally **WebGPU**) rendering backend that **coexists** with the proven Canvas2D fallback. The GPU path should achieve:
-
-- **Pixel-perfect rendering**: Zero visual compromises — the GPU renderer must match or exceed Canvas2D fidelity for every glyph, decoration, and special character
-- **Maximum throughput**: Handle `cat /dev/urandom | xxd` or scrolling 100K-line files at the GPU's vsync rate, not the CPU's text-shaping rate
-- **Minimal weight**: No WebGL helper libraries, no third-party glyph rasterizers — the GPU renderer should be as self-contained as the Canvas2D renderer (~2000 lines or less)
-- **Graceful coexistence**: Canvas2D remains the default fallback; GPU rendering is opt-in and degrades transparently
-
-### Key Architectural Questions
-
-1. **Renderer Abstraction Layer**: How should we design the interface between the terminal emulator (parser, buffer, state) and the renderer? What is the right abstraction boundary so Canvas2D, WebGL, and WebGPU renderers can be swapped at runtime or selected at initialization?
-
-2. **Glyph Atlas Strategy**: WebGL/WebGPU terminal renderers typically pre-render glyphs into a texture atlas. How should we:
-   - Build and manage the atlas (static vs dynamic/LRU)?
-   - Handle the existing programmatic Unicode characters (block elements, box drawing, braille) — should these be atlas entries or shader-generated?
-   - Handle glyph probing for PUA/Nerd Font symbols in the GPU context?
-   - Deal with font changes and DPR changes (atlas invalidation)?
-
-3. **Buffer-to-GPU Data Flow**: The current buffer uses per-cell JS objects. What is the optimal data structure for GPU upload?
-   - Typed arrays? Packed attribute encoding?
-   - How to minimize per-frame data transfer between CPU and GPU?
-   - Dirty-region tracking to enable partial buffer updates?
-
-4. **Feature Parity Concerns**: Which current features are trivial/hard/impossible to replicate in a GPU renderer?
-   - Text decorations (underline, double underline, strikethrough, overline)
-   - Selection highlighting with alpha blending
-   - Cursor rendering with blink animation
-   - Scrollback buffer scrolling
-   - High-DPI / devicePixelRatio handling
-
-5. **Fallback Strategy**: How should the system handle:
-   - Browsers without WebGL2/WebGPU support?
-   - WebGL context loss (and restoration)?
-   - Mobile devices with limited GPU memory?
+1. **Rounded corner arcs (╭╮╯╰)** do not connect seamlessly with adjacent straight box-drawing segments at cell edge midpoints. The current pixel-space arc SDF uses `radius = min(halfW, halfH)` but terminal cells are non-square (typically ~8×17 pixels), so the arc endpoint doesn't land at (0.5, 0) or (0, 0.5) of the adjacent cell boundary.
+2. **Double-line box drawing** corners appear to render incorrectly
+3. Clipboard and input handling was broken (fixed but needs validation)
 
 ## Attached Context Packs
 
 | File | Contents | Token Estimate |
 |------|----------|----------------|
-| `context_full.md` | Complete shellport source: nanoterm.js, app.js, server.ts, client.ts, crypto, types, tests, config | ~56K |
+| `context_full.md` | Complete NanoTermV2 source: `index.js` (emulator core), `webgl-renderer.js` (WebGL2 renderer), `canvas-renderer.js` (Canvas2D fallback), `constants.js` (box drawing table) | ~25K |
 
 ## Focus Areas
 
-1. **Renderer Interface Design**: Propose a clean abstraction that separates terminal state from rendering. Consider:
-   - What methods/data the renderer needs from the terminal (buffer access, cursor state, selection, scroll offset)
-   - What events the terminal needs from the renderer (resize measurements, glyph metrics)
-   - Whether the terminal buffer format itself should change to be GPU-friendly from the start
+### 1. Rounded Corner Arc SDF Geometry (HIGHEST PRIORITY)
 
-2. **WebGL Text Rendering Pipeline**: Design the glyph atlas and text rendering approach:
-   - Atlas texture format and layout (monochrome vs RGBA, grid vs bin-packed)
-   - Dynamic atlas growth strategy for uncommon glyphs
-   - Subpixel positioning considerations (or lack thereof in a monospace grid)
-   - How programmatic characters (blocks, box drawing) should be generated — atlas bake vs fragment shader
+The current shader code for ╭╮╯╰ uses:
+```glsl
+vec2 px = localUV * u_charSize;  // pixel position
+float halfW = u_charSize.x * 0.5;
+float halfH = u_charSize.y * 0.5;
+// center at opposite corner, e.g. for ╭: center = u_charSize (bottom-right)
+float radius = min(halfW, halfH);
+if (abs(dist - radius) < 0.8) hit = true;
+```
 
-3. **GPU Buffer Management**: Design the CPU→GPU data transfer:
-   - Packed cell representation (codepoint + fg + bg + flags in how many bytes per cell?)
-   - Uniform buffer vs texture-based cell data
-   - Instanced rendering vs full-screen quad approaches
-   - Dirty-row tracking and partial upload strategies
+**The problem:** With non-square cells (e.g. 8px × 17px), `min(halfW, halfH) = 4`, so the arc is a circle of radius 4px centered at (8, 17). This circle:
+- Reaches X=4 at Y≈17 ✓ (connects to the horizontal line at cell right-edge midpoint... wait, it's a circle, so at Y=17 it's at X=8±4, meaning X=4 and X=12... but X=4 is the midpoint at `localUV.x=0.5` ✓)
+- At X=0: it reaches Y=17-sqrt(16-64)... imaginary → the arc never reaches the vertical line at Y midpoint!
 
-4. **Shader Architecture**: Outline the vertex/fragment shader design:
-   - Background and foreground in one pass or two?
-   - How to handle text decorations (underline, strikethrough) — geometry vs fragment shader
-   - Alpha blending for selection overlay
-   - Cursor rendering approach
+**The arc cannot connect both edges with a circular radius when cells are non-square.** This is the fundamental geometry bug. Review and suggest the correct approach. Consider:
+- Elliptical arc instead of circular
+- Remapping to UV space with aspect-correction
+- Using `halfW` for the horizontal radius and `halfH` for the vertical radius
 
-5. **WebGPU Future-Proofing**: Consider how the design supports a future WebGPU backend:
-   - Compute shader opportunities (buffer diff, glyph rasterization)
-   - Shared abstractions between WebGL and WebGPU
-   - Whether to target WebGPU first and polyfill down to WebGL
+### 2. Box Drawing Segment Rendering
+- Is the `BOX_DRAWING_SEGMENTS` table complete and correct for all codepoints 0x2500–0x257F?
+- Do null entries correctly map to procedural rendering in the shader?
+- Are the hit-test thresholds for thin (1) vs thick (2) weight correct?
+- Do segments connect exactly at cell edge midpoints with no sub-pixel gaps?
 
-6. **Performance Analysis**: Identify the actual bottlenecks in the current Canvas2D renderer and quantify the expected improvement from GPU rendering:
-   - Where does the current renderer spend the most time? (fillRect? fillText? getImageData for glyph probing?)
-   - What throughput improvement is realistic for terminal scrolling?
-   - Are there intermediate optimizations (dirty tracking, offscreen canvas workers) worth doing before the GPU jump?
+### 3. Texture Upload & Data Packing
+- Is the `_buildGridData()` packing correct? Check bit-field extraction in shader vs JavaScript encoding
+- Are atlas UV coordinates computed correctly? Watch for off-by-one in `texelFetch`
+- Is `_uploadBoxTexture()` encoding the segment weights correctly in RGBA32UI channels?
+- Any precision issues with float/int conversions?
 
-7. **Migration Path**: Propose a phased implementation plan:
-   - What can be built first as a standalone proof-of-concept?
-   - How to integrate incrementally without breaking the existing Canvas2D renderer?
-   - Testing strategy for visual correctness comparison between renderers
+### 4. Performance
+- `_buildGridData()` iterates entire grid every frame — could dirty-region tracking help?
+- Atlas texture grows but never shrinks — memory leak in long sessions?
+- `requestAnimationFrame` loop runs even when nothing changes
+- Any unnecessary texture re-uploads?
+
+### 5. Renderer Interface Parity
+- What features does CanvasRenderer support that WebGLRenderer is missing?
+- Is `measureChar()` consistent between renderers?
+- Are cursor, selection overlay, underline/strikethrough equivalent?
+- Does DPI/devicePixelRatio handling match?
+
+### 6. Clipboard & Input
+- Ctrl+C: copies when selection exists, sends ^C otherwise — is the logic correct for all edge cases?
+- Ctrl+Shift+C: always copies — does it work with empty selection?
+- Right-click context menu: null guard added — is there a better pattern?
+- Does `getSelection()` correctly decode all codepoints from the packed `Uint32Array`?
 
 ## Output Format
 
-For each focus area, provide:
+For each finding:
 
-- **Assessment**: Current state analysis and key considerations
-- **Recommendation**: Concrete architectural recommendation with rationale
-- **Code Sketch**: Where helpful, provide pseudocode or interface definitions
-- **Risk**: What could go wrong and how to mitigate
+- **Severity**: CRITICAL / HIGH / MEDIUM / LOW
+- **File**: filename and line numbers
+- **Category**: which focus area (1-6)
+- **Description**: what the issue is
+- **Impact**: what the user sees or what breaks
+- **Suggested Fix**: concrete code-level recommendation
 
-End with:
-- **Priority-ordered implementation roadmap** (what to build first, second, third)
-- **Critical design decisions** that must be made before writing any code
-- **Overall feasibility assessment** with estimated complexity per phase
+Group findings by severity. End with: total counts, top 3 issues, overall assessment of production-readiness.
