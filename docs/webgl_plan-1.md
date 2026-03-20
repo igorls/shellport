@@ -132,13 +132,13 @@ Draw calls drop from ~4000 to exactly **two** per frame (one texture upload, one
 
 Implementing this as a "big bang" rewrite is risky. Follow this phased approach:
 
-**1. The Memory Refactor (Immediate, Canvas-only)**
+**1. The Memory Refactor (Immediate, Canvas-only)** — ✅ **Completed**
 
 - Rip out `Array<Array<Cell>>` in `nanoterm.js`.
 - Replace it with the 16-byte-per-cell `Uint32Array`. Update the existing `Canvas2D` renderer to decode the bitmasks.
 - _Result:_ Massive CPU speedup and reduced GC footprint with zero visual changes.
 
-**2. Architectural Abstraction**
+**2. Architectural Abstraction** — ✅ **Completed**
 
 - Extract the Canvas2D rendering functions into a `CanvasRenderer` class implementing `IRenderer`.
 

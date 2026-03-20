@@ -15,6 +15,7 @@ import {
     rgbPack
 } from './constants.js';
 import { CanvasRenderer } from './canvas-renderer.js';
+import { WebGLRenderer } from './webgl-renderer.js';
 
 class NanoTermV2 {
     constructor(container, sendFn, options = {}) {
@@ -29,7 +30,8 @@ class NanoTermV2 {
             cursorBlink: options.cursorBlink !== false,
             allowProprietary: options.allowProprietary !== false,
             padding: options.padding ?? 6,
-            lineHeight: options.lineHeight || 0
+            lineHeight: options.lineHeight || 0,
+            renderer: options.renderer || 'auto'  // 'auto' | 'canvas' | 'webgl'
         };
 
         // Theme colors
@@ -42,8 +44,8 @@ class NanoTermV2 {
             palette: theme.palette || XTERM_256_PALETTE
         };
 
-        // Create renderer (Canvas2D by default)
-        this.renderer = new CanvasRenderer(container, this.options, this.colors);
+        // Create renderer with auto-detection and fallback
+        this.renderer = this._createRenderer(container);
 
         // Convenience aliases (backward compat + event binding)
         this.canvas = this.renderer.canvas;
@@ -161,6 +163,46 @@ class NanoTermV2 {
                 }
             }).catch(() => { /* font not available, fallback is fine */ });
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Renderer Factory
+    // -------------------------------------------------------------------------
+
+    _createRenderer(container) {
+        const mode = this.options.renderer;
+
+        if (mode === 'webgl' || mode === 'auto') {
+            try {
+                const renderer = new WebGLRenderer(container, this.options, this.colors);
+                // Listen for context lost — auto-fallback to Canvas2D
+                renderer.canvas.addEventListener('webglcontextlost', (e) => {
+                    e.preventDefault();
+                    console.warn('[NanoTermV2] WebGL context lost — falling back to Canvas2D');
+                    this._switchRenderer(new CanvasRenderer(container, this.options, this.colors));
+                });
+                return renderer;
+            } catch (err) {
+                if (mode === 'webgl') {
+                    console.error('[NanoTermV2] WebGL2 not available:', err.message);
+                }
+                // Fall through to Canvas2D
+            }
+        }
+
+        return new CanvasRenderer(container, this.options, this.colors);
+    }
+
+    _switchRenderer(newRenderer) {
+        const oldCanvas = this.renderer.canvas;
+        this.renderer.destroy();
+        this.renderer = newRenderer;
+        this.canvas = newRenderer.canvas;
+        this.measureChar();
+        this.resize();
+        // Re-bind event listeners on the new canvas
+        this.setupEvents();
+        this.startCursorBlink();
     }
 
     // -------------------------------------------------------------------------
