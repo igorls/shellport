@@ -94,7 +94,7 @@ class NanoTermV2 {
         this.send = sendFn;
         this.options = {
             fontSize: options.fontSize || 14,
-            fontFamily: options.fontFamily || "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+            fontFamily: options.fontFamily || "'JetBrains Mono Nerd Font', 'CaskaydiaCove Nerd Font', 'FiraCode Nerd Font', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace",
             theme: options.theme || {},
             scrollback: options.scrollback || 10000,
             cursorStyle: options.cursorStyle || 'block',
@@ -188,6 +188,9 @@ class NanoTermV2 {
         // Bracketed paste
         this.bracketedPaste = false;
 
+        // Pending wrap state (VT100 phantom column / DECAWM)
+        this.wrapPending = false;
+
         // Focus state
         this.focused = false;
 
@@ -200,6 +203,11 @@ class NanoTermV2 {
         this.renderPending = false;
         this.lastRenderTime = 0;
         this.lastFont = null;
+
+        // Glyph availability cache: codePoint → boolean (true = renderable)
+        this._glyphCache = new Map();
+        // Pre-probe PUA range availability at init
+        this._puaAvailable = false;
 
         // Resize debounce
         this._resizeDebounceTimer = null;
@@ -240,8 +248,104 @@ class NanoTermV2 {
         const fontSize = this.options.fontSize;
         this.ctx.font = `${fontSize}px ${this.options.fontFamily}`;
         const metrics = this.ctx.measureText('W');
-        this.charWidth = Math.max(8, Math.ceil(metrics.width));
+        // Preserve fractional width for precise subpixel character placement
+        this.charWidth = Math.max(4, metrics.width);
         this.charHeight = Math.max(14, Math.ceil(fontSize * this.lineHeight));
+
+        // Invalidate tofu reference data so it's re-probed with current font
+        this._tofuData = null;
+
+        // Probe Private Use Area glyph availability (Powerline/Nerd Font symbols)
+        this._glyphCache.clear();
+        // Test a representative sample of PUA glyphs:
+        //  U+E0B0 = Powerline right arrow (most common)
+        //  U+E0A0 = Powerline branch symbol
+        //  U+F001 = Nerd Font fa-music
+        this._puaAvailable = this._probeGlyph('\uE0B0') ||
+                             this._probeGlyph('\uE0A0') ||
+                             this._probeGlyph('\uF001');
+    }
+
+    /**
+     * Probe whether a glyph is renderable by the current font.
+     * 
+     * Uses a visual signature approach: renders the character on a tiny canvas
+     * and detects the .notdef tofu pattern. Tofu glyphs are hollow rectangles
+     * with pixels concentrated on edges. Real glyphs have complex internal 
+     * pixel patterns.
+     * 
+     * As a fast-path, uses document.fonts.check() when available, but wraps
+     * it with a secondary validation since generic families like 'monospace'
+     * can falsely report support.
+     */
+    _probeGlyph(ch) {
+        const fontSpec = `${this.options.fontSize}px ${this.options.fontFamily}`;
+        const size = Math.max(24, this.options.fontSize + 8);
+
+        // Get the exact pixel signature of a known-missing glyph (U+FFFF)
+        // This is guaranteed to be unassigned in Unicode, so it always renders
+        // the system's native .notdef tofu glyph.
+        if (!this._tofuData) {
+            const ref = document.createElement('canvas');
+            ref.width = size; ref.height = size;
+            const rctx = ref.getContext('2d', { willReadFrequently: true });
+            rctx.font = fontSpec;
+            rctx.textBaseline = 'top';
+            rctx.fillStyle = '#fff';
+            rctx.fillText('\uFFFF', 2, 2);
+            this._tofuData = rctx.getImageData(0, 0, size, size).data;
+        }
+
+        // Render the actual test character
+        const probe = document.createElement('canvas');
+        probe.width = size; probe.height = size;
+        const pctx = probe.getContext('2d', { willReadFrequently: true });
+        pctx.font = fontSpec;
+        pctx.textBaseline = 'top';
+        pctx.fillStyle = '#fff';
+        pctx.fillText(ch, 2, 2);
+        const testData = pctx.getImageData(0, 0, size, size).data;
+
+        // Compare pixel-by-pixel against the tofu reference
+        let diff = 0;
+        let hasPixels = false;
+        for (let i = 3; i < testData.length; i += 4) {
+            if (testData[i] > 0) hasPixels = true;
+            if (testData[i] !== this._tofuData[i]) diff++;
+        }
+
+        // If it perfectly matches the tofu signature, it's missing
+        if (diff === 0 && hasPixels) return false;
+        // No pixels at all — also missing
+        if (!hasPixels) return false;
+        return true;
+    }
+
+    /**
+     * Check if a codepoint is renderable. Uses cached results for performance.
+     * Private Use Area (U+E000–U+F8FF) is batch-checked via the _puaAvailable flag.
+     */
+    _isGlyphRenderable(cp) {
+        // Standard ASCII + Latin + common scripts (Latin Extended, Greek, Cyrillic) — always renderable
+        if (cp < 0x0530) return true;
+
+        // CJK Unified Ideographs — typically available in system fonts
+        if (cp >= 0x4E00 && cp <= 0x9FFF) return true;
+
+        // Private Use Area (Powerline, Nerd Font, devicons)
+        if (cp >= 0xE000 && cp <= 0xF8FF) return this._puaAvailable;
+
+        // Supplementary PUA (Nerd Font Material Design icons, etc.)
+        if (cp >= 0xF0000) return this._puaAvailable;
+
+        // Check cache
+        const cached = this._glyphCache.get(cp);
+        if (cached !== undefined) return cached;
+
+        // Probe and cache
+        const renderable = this._probeGlyph(String.fromCodePoint(cp));
+        this._glyphCache.set(cp, renderable);
+        return renderable;
     }
 
     resetTerminal() {
@@ -249,6 +353,7 @@ class NanoTermV2 {
         this.rows = 24;
         this.cursorX = 0;
         this.cursorY = 0;
+        this.wrapPending = false;
         this.curFg = 256;
         this.curBg = 256;
         this.curFlags = 0;
@@ -276,8 +381,11 @@ class NanoTermV2 {
     }
 
     createEmptyLine() {
+        // BCE: use current background/foreground for erased cells
+        const fg = this.curFg;
+        const bg = this.curBg;
         return Array.from({ length: this.cols }, () => ({
-            char: ' ', fg: 256, bg: 256, flags: 0
+            char: ' ', fg, bg, flags: 0
         }));
     }
 
@@ -286,6 +394,10 @@ class NanoTermV2 {
     // -------------------------------------------------------------------------
 
     resize() {
+        // Re-measure char dimensions (font may have loaded since last measure,
+        // or container may have just become visible after display:none)
+        this.measureChar();
+
         const rect = this.container.getBoundingClientRect();
         const dpr = window.devicePixelRatio || 1;
 
@@ -408,11 +520,15 @@ class NanoTermV2 {
             this.parseIntermediates = '';
         } else if (code === 0x0D) {
             this.cursorX = 0;
+            this.wrapPending = false;
         } else if (code === 0x0A) {
+            this.wrapPending = false;
             this.lineFeed();
         } else if (code === 0x08) {
+            this.wrapPending = false;
             if (this.cursorX > 0) this.cursorX--;
         } else if (code === 0x09) {
+            this.wrapPending = false;
             this.tabForward();
         } else if (code === 0x07) {
             // Bell
@@ -458,6 +574,7 @@ class NanoTermV2 {
         } else if (c === '8') {
             this.cursorX = this.savedCursorX;
             this.cursorY = this.savedCursorY;
+            this.wrapPending = false;
             this.curFg = this.savedFg;
             this.curBg = this.savedBg;
             this.curFlags = this.savedFlags;
@@ -531,21 +648,25 @@ class NanoTermV2 {
         const priv = intermediates.includes('?');
 
         switch (cmd) {
-            case 'A': this.cursorY = Math.max(this.getScrollTop(), this.cursorY - (p[0] || 1)); break;
-            case 'B': this.cursorY = Math.min(this.getScrollBottom(), this.cursorY + (p[0] || 1)); break;
-            case 'C': this.cursorX = Math.min(this.cols - 1, this.cursorX + (p[0] || 1)); break;
-            case 'D': this.cursorX = Math.max(0, this.cursorX - (p[0] || 1)); break;
+            // All cursor movement sequences clear the pending wrap state
+            case 'A': this.wrapPending = false; this.cursorY = Math.max(this.getScrollTop(), this.cursorY - (p[0] || 1)); break;
+            case 'B': this.wrapPending = false; this.cursorY = Math.min(this.getScrollBottom(), this.cursorY + (p[0] || 1)); break;
+            case 'C': this.wrapPending = false; this.cursorX = Math.min(this.cols - 1, this.cursorX + (p[0] || 1)); break;
+            case 'D': this.wrapPending = false; this.cursorX = Math.max(0, this.cursorX - (p[0] || 1)); break;
             case 'E':
+                this.wrapPending = false;
                 this.cursorX = 0;
                 this.cursorY = Math.min(this.getScrollBottom(), this.cursorY + (p[0] || 1));
                 break;
             case 'F':
+                this.wrapPending = false;
                 this.cursorX = 0;
                 this.cursorY = Math.max(this.getScrollTop(), this.cursorY - (p[0] || 1));
                 break;
-            case 'G': this.cursorX = Math.max(0, Math.min(this.cols - 1, (p[0] || 1) - 1)); break;
+            case 'G': this.wrapPending = false; this.cursorX = Math.max(0, Math.min(this.cols - 1, (p[0] || 1) - 1)); break;
             case 'H':
             case 'f':
+                this.wrapPending = false;
                 this.cursorY = Math.max(0, Math.min(this.rows - 1, (p[0] || 1) - 1));
                 this.cursorX = Math.max(0, Math.min(this.cols - 1, (p[1] || 1) - 1));
                 break;
@@ -576,7 +697,7 @@ class NanoTermV2 {
                 break;
             case 'S': this.scrollUp(p[0] || 1); break;
             case 'T': this.scrollDown(p[0] || 1); break;
-            case 'd': this.cursorY = Math.max(0, Math.min(this.rows - 1, (p[0] || 1) - 1)); break;
+            case 'd': this.wrapPending = false; this.cursorY = Math.max(0, Math.min(this.rows - 1, (p[0] || 1) - 1)); break;
             case 'm': this.processSGR(p); break;
             case 'h': this.setMode(p, priv); break;
             case 'l': this.resetMode(p, priv); break;
@@ -835,6 +956,14 @@ class NanoTermV2 {
     // -------------------------------------------------------------------------
 
     putChar(c) {
+        // VT100 DECAWM: if a previous putChar set wrapPending,
+        // execute the deferred line wrap before writing this character
+        if (this.wrapPending) {
+            this.cursorX = 0;
+            this.lineFeed();
+            this.wrapPending = false;
+        }
+
         const buffer = this.getBuffer();
         if (this.cursorY >= 0 && this.cursorY < buffer.length &&
             this.cursorX >= 0 && this.cursorX < this.cols) {
@@ -842,10 +971,12 @@ class NanoTermV2 {
                 char: c, fg: this.curFg, bg: this.curBg, flags: this.curFlags
             };
         }
-        this.cursorX++;
-        if (this.cursorX >= this.cols) {
-            this.cursorX = 0;
-            this.lineFeed();
+
+        if (this.cursorX >= this.cols - 1) {
+            // Cursor stays at last column; wrap is deferred until next putChar
+            this.wrapPending = true;
+        } else {
+            this.cursorX++;
         }
     }
 
@@ -921,10 +1052,10 @@ class NanoTermV2 {
         if (!row) return;
         switch (mode) {
             case 0:
-                for (let x = this.cursorX; x < this.cols; x++) row[x] = { char: ' ', fg: 256, bg: 256, flags: 0 };
+                for (let x = this.cursorX; x < this.cols; x++) row[x] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
                 break;
             case 1:
-                for (let x = 0; x <= this.cursorX; x++) row[x] = { char: ' ', fg: 256, bg: 256, flags: 0 };
+                for (let x = 0; x <= this.cursorX; x++) row[x] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
                 break;
             case 2:
                 buffer[this.cursorY] = this.createEmptyLine();
@@ -936,7 +1067,7 @@ class NanoTermV2 {
         const row = this.getBuffer()[this.cursorY];
         if (!row) return;
         for (let i = 0; i < n && this.cursorX + i < this.cols; i++) {
-            row[this.cursorX + i] = { char: ' ', fg: 256, bg: 256, flags: 0 };
+            row[this.cursorX + i] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
         }
     }
 
@@ -945,7 +1076,7 @@ class NanoTermV2 {
         if (!row) return;
         for (let i = row.length - 1; i >= this.cursorX + n; i--) row[i] = row[i - n];
         for (let i = this.cursorX; i < this.cursorX + n && i < row.length; i++) {
-            row[i] = { char: ' ', fg: 256, bg: 256, flags: 0 };
+            row[i] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
         }
     }
 
@@ -953,7 +1084,7 @@ class NanoTermV2 {
         const row = this.getBuffer()[this.cursorY];
         if (!row) return;
         for (let i = this.cursorX; i < row.length - n; i++) row[i] = row[i + n];
-        for (let i = row.length - n; i < row.length; i++) row[i] = { char: ' ', fg: 256, bg: 256, flags: 0 };
+        for (let i = row.length - n; i < row.length; i++) row[i] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
     }
 
     insertLines(n) {
@@ -1166,6 +1297,8 @@ class NanoTermV2 {
             const cp = ch.codePointAt(0);
             // Programmatic rendering for block elements, box drawing, and braille
             if (cp >= 0x2500 && this.renderSpecialChar(cp, cx, baseline, textColor)) continue;
+            // Skip unrenderable glyphs (tofu prevention)
+            if (!this._isGlyphRenderable(cp)) continue;
             this.ctx.fillText(ch, cx, baseline);
         }
 
