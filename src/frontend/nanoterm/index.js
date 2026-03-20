@@ -1171,7 +1171,31 @@ class NanoTermV2 {
                 case 'PageUp': seq = '\x1b[5~'; break;
                 case 'PageDown': seq = '\x1b[6~'; break;
                 default:
-                    if (e.ctrlKey && e.key.length === 1) {
+                    // Industry-standard clipboard: Ctrl+Shift+C always copies,
+                    // Ctrl+C copies when text is selected (otherwise sends ^C)
+                    if (e.ctrlKey && (e.key === 'c' || e.key === 'C')) {
+                        if (e.shiftKey || this.selection) {
+                            e.preventDefault();
+                            this.copyToClipboard();
+                            if (!e.shiftKey) this.selection = null; // clear selection after copy
+                            this.triggerRender();
+                            return;
+                        }
+                        // No selection + no shift → send ^C
+                        seq = '\x03';
+                    } else if (e.ctrlKey && e.shiftKey && (e.key === 'v' || e.key === 'V')) {
+                        // Ctrl+Shift+V: paste from clipboard
+                        e.preventDefault();
+                        navigator.clipboard.readText().then(text => {
+                            if (text) {
+                                if (this.bracketedPaste) {
+                                    text = '\x1b[200~' + text + '\x1b[201~';
+                                }
+                                this.send(text);
+                            }
+                        }).catch(() => {});
+                        return;
+                    } else if (e.ctrlKey && e.key.length === 1) {
                         const code = e.key.toUpperCase().charCodeAt(0);
                         if (code >= 64 && code <= 95) seq = String.fromCharCode(code - 64);
                     }
@@ -1274,6 +1298,7 @@ class NanoTermV2 {
     onContextMenu(e) {
         e.preventDefault();
         const menu = document.getElementById('context-menu');
+        if (!menu) return; // No context menu element available
         menu.style.left = e.clientX + 'px';
         menu.style.top = e.clientY + 'px';
         menu.classList.add('visible');
