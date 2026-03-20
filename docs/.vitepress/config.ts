@@ -45,7 +45,7 @@ export default defineConfig({
         text: 'API Reference',
         collapsible: true,
         items: [
-          { text: 'Server Options', link: '/shellport/api/server-options' },
+          { text: 'CLI Reference', link: '/shellport/api/cli' },
           { text: 'NanoTermV2 Library', link: '/shellport/api/nanoterm' }
         ]
       },
