@@ -15,7 +15,7 @@ export default defineConfig({
     },
     nav: [
       { text: 'Home', link: '/shellport/' },
-      { text: 'Getting Started', link: '/shellport/getting-started' },
+      { text: 'Getting Started', link: '/shellport/getting-started/installation' },
       { text: 'Guides', link: '/shellport/guides/' },
       { text: 'API', link: '/shellport/api/' },
       { text: 'Internals', link: '/shellport/internals/' },
@@ -26,7 +26,7 @@ export default defineConfig({
         text: 'Getting Started',
         collapsible: true,
         items: [
-          { text: 'Installation', link: '/shellport/getting-started' },
+          { text: 'Installation', link: '/shellport/getting-started/installation' },
           { text: 'Quick Start', link: '/shellport/getting-started/quick-start' }
         ]
       },

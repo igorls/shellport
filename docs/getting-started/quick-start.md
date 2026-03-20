@@ -86,6 +86,6 @@ Only disable security features on trusted networks. The defaults (encryption + T
 
 ## Next Steps
 
-- Learn about all available options in the [Basic Usage](../guides/basic-usage.md) guide
-- Configure Tailscale for public access in the [Tailscale](../guides/tailscale.md) guide
-- Understand the security model in [Security](../guides/security.md)
+- Learn about all available server options
+- Explore the NanoTermV2 library for embedding the terminal
+- Understand the security architecture
