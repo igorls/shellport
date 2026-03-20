@@ -25,6 +25,44 @@ const XTERM_256_PALETTE = [
     })
 ];
 
+// ── Packed Cell Layout ──────────────────────────────────────────────────────
+// 16 bytes (4 × Uint32) per cell — matches Ghostty/Alacritty truecolor format
+// Word 0: [codepoint: 21 bits][flags: 11 bits]
+// Word 1: fg color (32-bit RGBA, 0xRRGGBBFF)   — 0 = default theme fg
+// Word 2: bg color (32-bit RGBA, 0xRRGGBBFF)   — 0 = default theme bg
+// Word 3: reserved (atlas UV for WebGL phase)
+const CELL_WORDS = 4;
+const CELL_CP_SHIFT = 11;
+const CELL_FLAGS_MASK = 0x7FF;
+const COLOR_DEFAULT = 0;
+const SPACE_CP = 0x20;
+
+// Precompute palette as RGBA uint32 for O(1) lookup
+function hexToRGBA(hex) {
+    return ((parseInt(hex.slice(1, 3), 16) << 24) |
+            (parseInt(hex.slice(3, 5), 16) << 16) |
+            (parseInt(hex.slice(5, 7), 16) << 8) | 0xFF) >>> 0;
+}
+
+function rgbPack(r, g, b) {
+    return ((r << 24) | (g << 16) | (b << 8) | 0xFF) >>> 0;
+}
+
+const XTERM_256_RGBA = XTERM_256_PALETTE.map(hexToRGBA);
+
+// CSS color string cache (terminals use <50 distinct colors)
+const _cssCache = new Map();
+function rgbaToCSS(rgba) {
+    let css = _cssCache.get(rgba);
+    if (css !== undefined) return css;
+    const r = (rgba >>> 24) & 0xFF;
+    const g = (rgba >>> 16) & 0xFF;
+    const b = (rgba >>> 8) & 0xFF;
+    css = '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+    _cssCache.set(rgba, css);
+    return css;
+}
+
 const ATTR = {
     BOLD: 1 << 0,
     DIM: 1 << 1,
@@ -122,6 +160,10 @@ class NanoTermV2 {
             palette: theme.palette || XTERM_256_PALETTE
         };
 
+        // Precompute theme colors as RGBA uint32 for packed cell resolution
+        this.themeFgRGBA = hexToRGBA(this.colors.foreground);
+        this.themeBgRGBA = hexToRGBA(this.colors.background);
+
         // Terminal state
         this.cols = 80;
         this.rows = 24;
@@ -129,11 +171,11 @@ class NanoTermV2 {
         this.charHeight = 0;
         this.lineHeight = this.options.lineHeight || 1.15;
 
-        // Primary and alternate buffers
-        this.primaryBuffer = [];
-        this.alternateBuffer = [];
+        // Primary and alternate buffers (flat Uint32Array grids)
+        this.grid = null;          // Active grid (points to primary or alternate)
+        this.primaryGrid = null;   // Primary screen grid
         this.useAlternate = false;
-        this.scrollbackBuffer = [];
+        this.scrollbackBuffer = []; // Array of Uint32Array row snapshots
         this.scrollbackOffset = 0;
 
         // Cursor state
@@ -145,12 +187,12 @@ class NanoTermV2 {
         this.cursorBlinkState = true;
         this.cursorBlinkTimer = null;
 
-        // Current attributes
-        this.curFg = 256;
-        this.curBg = 256;
+        // Current attributes (RGBA truecolor, 0 = default)
+        this.curFg = COLOR_DEFAULT;
+        this.curBg = COLOR_DEFAULT;
         this.curFlags = 0;
-        this.savedFg = 256;
-        this.savedBg = 256;
+        this.savedFg = COLOR_DEFAULT;
+        this.savedBg = COLOR_DEFAULT;
         this.savedFlags = 0;
 
         // Scroll region
@@ -358,8 +400,8 @@ class NanoTermV2 {
         this.cursorX = 0;
         this.cursorY = 0;
         this.wrapPending = false;
-        this.curFg = 256;
-        this.curBg = 256;
+        this.curFg = COLOR_DEFAULT;
+        this.curBg = COLOR_DEFAULT;
         this.curFlags = 0;
         this.scrollTop = 0;
         this.scrollBottom = 0;
@@ -367,8 +409,8 @@ class NanoTermV2 {
         this.scrollbackBuffer = [];
         this.scrollbackOffset = 0;
         this.selection = null;
-        this.primaryBuffer = this.createBuffer(this.rows);
-        this.alternateBuffer = [];
+        this.primaryGrid = this.allocGrid(this.cols, this.rows);
+        this.grid = this.primaryGrid;
         this.tabStops.clear();
         for (let i = 0; i < this.cols; i += 8) {
             this.tabStops.add(i);
@@ -376,28 +418,49 @@ class NanoTermV2 {
         this.resize();
     }
 
-    createBuffer(rows) {
-        const buffer = [];
-        for (let i = 0; i < rows; i++) {
-            buffer.push(this.createEmptyLine());
+    // ── Grid Helpers (Uint32Array) ──────────────────────────────────────────
+
+    allocGrid(cols, rows) {
+        const grid = new Uint32Array(cols * rows * CELL_WORDS);
+        // Fill every cell with space + default colors
+        const word0 = SPACE_CP << CELL_CP_SHIFT;
+        for (let i = 0; i < grid.length; i += CELL_WORDS) {
+            grid[i] = word0;
+            // words 1,2,3 are 0 (COLOR_DEFAULT) — already zero-initialized
         }
-        return buffer;
+        return grid;
     }
 
-    createEmptyLine() {
-        // Default empty line — uses default colors (for buffer creation, resize)
-        return Array.from({ length: this.cols }, () => ({
-            char: ' ', fg: 256, bg: 256, flags: 0
-        }));
+    fillRow(y, cp, fg, bg, flags) {
+        const offset = y * this.cols * CELL_WORDS;
+        const word0 = (cp << CELL_CP_SHIFT) | (flags & CELL_FLAGS_MASK);
+        for (let x = 0; x < this.cols; x++) {
+            const off = offset + x * CELL_WORDS;
+            this.grid[off] = word0;
+            this.grid[off + 1] = fg;
+            this.grid[off + 2] = bg;
+            this.grid[off + 3] = 0;
+        }
     }
 
-    createBCELine() {
-        // BCE-compliant empty line — uses current SGR colors (for erase/scroll ops)
-        const fg = this.curFg;
-        const bg = this.curBg;
-        return Array.from({ length: this.cols }, () => ({
-            char: ' ', fg, bg, flags: 0
-        }));
+    fillRange(y, startX, endX, cp, fg, bg, flags) {
+        const rowOffset = y * this.cols * CELL_WORDS;
+        const word0 = (cp << CELL_CP_SHIFT) | (flags & CELL_FLAGS_MASK);
+        for (let x = startX; x < endX && x < this.cols; x++) {
+            const off = rowOffset + x * CELL_WORDS;
+            this.grid[off] = word0;
+            this.grid[off + 1] = fg;
+            this.grid[off + 2] = bg;
+            this.grid[off + 3] = 0;
+        }
+    }
+
+    extractRow(y) {
+        const rowWords = this.cols * CELL_WORDS;
+        const offset = y * rowWords;
+        const row = new Uint32Array(rowWords);
+        row.set(this.grid.subarray(offset, offset + rowWords));
+        return row;
     }
 
     // -------------------------------------------------------------------------
@@ -414,6 +477,8 @@ class NanoTermV2 {
 
         const pad = this.options.padding;
 
+        const oldCols = this.cols;
+        const oldRows = this.rows;
         this.cols = Math.max(1, Math.floor((rect.width - pad * 2) / this.charWidth));
         this.rows = Math.max(1, Math.floor((rect.height - pad * 2) / this.charHeight));
         this.scrollBottom = 0;
@@ -425,9 +490,13 @@ class NanoTermV2 {
         this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         this.lastFont = null;
 
-        this.resizeBuffer(this.primaryBuffer);
-        if (this.alternateBuffer.length > 0) {
-            this.resizeBuffer(this.alternateBuffer);
+        if (this.grid) {
+            this.primaryGrid = this.resizeGrid(this.primaryGrid, oldCols, oldRows, true);
+            if (this.useAlternate) {
+                this.grid = this.resizeGrid(this.grid, oldCols, oldRows, false);
+            } else {
+                this.grid = this.primaryGrid;
+            }
         }
 
         this.tabStops.clear();
@@ -447,23 +516,40 @@ class NanoTermV2 {
         this.triggerRender();
     }
 
-    resizeBuffer(buffer) {
-        while (buffer.length < this.rows) {
-            buffer.push(this.createEmptyLine());
-        }
-        while (buffer.length > this.rows) {
-            this.scrollbackBuffer.push(buffer.shift());
-            if (this.scrollbackBuffer.length > this.options.scrollback) {
-                this.scrollbackBuffer.shift();
+    resizeGrid(oldGrid, oldCols, oldRows, isPrimary) {
+        const newCols = this.cols;
+        const newRows = this.rows;
+        const newGrid = this.allocGrid(newCols, newRows);
+
+        // Push excess rows to scrollback if shrinking
+        let srcStartRow = 0;
+        if (oldRows > newRows) {
+            const excess = oldRows - newRows;
+            if (isPrimary && !this.useAlternate) {
+                for (let y = 0; y < excess; y++) {
+                    const rowWords = oldCols * CELL_WORDS;
+                    const offset = y * rowWords;
+                    const savedRow = new Uint32Array(rowWords);
+                    savedRow.set(oldGrid.subarray(offset, offset + rowWords));
+                    this.scrollbackBuffer.push(savedRow);
+                    if (this.scrollbackBuffer.length > this.options.scrollback) {
+                        this.scrollbackBuffer.shift();
+                    }
+                }
             }
+            srcStartRow = excess;
         }
-        for (let i = 0; i < buffer.length; i++) {
-            const row = buffer[i];
-            while (row.length < this.cols) {
-                row.push({ char: ' ', fg: 256, bg: 256, flags: 0 });
-            }
-            row.length = this.cols;
+
+        // Copy existing data (memcpy per row via TypedArray.set)
+        const copyRows = Math.min(oldRows - srcStartRow, newRows);
+        const copyWords = Math.min(oldCols, newCols) * CELL_WORDS;
+        for (let y = 0; y < copyRows; y++) {
+            const srcOff = (srcStartRow + y) * oldCols * CELL_WORDS;
+            const dstOff = y * newCols * CELL_WORDS;
+            newGrid.set(oldGrid.subarray(srcOff, srcOff + copyWords), dstOff);
         }
+
+        return newGrid;
     }
 
     // -------------------------------------------------------------------------
@@ -746,7 +832,7 @@ class NanoTermV2 {
             const p = params[i];
 
             if (p === 0) {
-                this.curFg = 256; this.curBg = 256; this.curFlags = 0;
+                this.curFg = COLOR_DEFAULT; this.curBg = COLOR_DEFAULT; this.curFlags = 0;
             } else if (p === 1) {
                 this.curFlags |= ATTR.BOLD;
             } else if (p === 2) {
@@ -780,40 +866,31 @@ class NanoTermV2 {
             } else if (p === 29) {
                 this.curFlags &= ~ATTR.STRIKETHROUGH;
             } else if (p >= 30 && p <= 37) {
-                this.curFg = p - 30;
+                this.curFg = XTERM_256_RGBA[p - 30];
             } else if (p === 38) {
                 if (params[i + 1] === 5) {
-                    this.curFg = params[i + 2] || 0; i += 2;
+                    this.curFg = XTERM_256_RGBA[params[i + 2] || 0]; i += 2;
                 } else if (params[i + 1] === 2) {
-                    this.curFg = this.rgbToIndex(params[i + 2] || 0, params[i + 3] || 0, params[i + 4] || 0); i += 4;
+                    this.curFg = rgbPack(params[i + 2] || 0, params[i + 3] || 0, params[i + 4] || 0); i += 4;
                 }
             } else if (p === 39) {
-                this.curFg = 256;
+                this.curFg = COLOR_DEFAULT;
             } else if (p >= 40 && p <= 47) {
-                this.curBg = p - 40;
+                this.curBg = XTERM_256_RGBA[p - 40];
             } else if (p === 48) {
                 if (params[i + 1] === 5) {
-                    this.curBg = params[i + 2] || 0; i += 2;
+                    this.curBg = XTERM_256_RGBA[params[i + 2] || 0]; i += 2;
                 } else if (params[i + 1] === 2) {
-                    this.curBg = this.rgbToIndex(params[i + 2] || 0, params[i + 3] || 0, params[i + 4] || 0); i += 4;
+                    this.curBg = rgbPack(params[i + 2] || 0, params[i + 3] || 0, params[i + 4] || 0); i += 4;
                 }
             } else if (p === 49) {
-                this.curBg = 256;
+                this.curBg = COLOR_DEFAULT;
             } else if (p >= 90 && p <= 97) {
-                this.curFg = p - 90 + 8;
+                this.curFg = XTERM_256_RGBA[p - 90 + 8];
             } else if (p >= 100 && p <= 107) {
-                this.curBg = p - 100 + 8;
+                this.curBg = XTERM_256_RGBA[p - 100 + 8];
             }
         }
-    }
-
-    rgbToIndex(r, g, b) {
-        if (r === g && g === b) {
-            if (r < 8) return 16;
-            if (r > 248) return 231;
-            return 232 + Math.round((r - 8) / 10);
-        }
-        return 16 + 36 * Math.round(r / 51) + 6 * Math.round(g / 51) + Math.round(b / 51);
     }
 
     // -------------------------------------------------------------------------
@@ -940,13 +1017,10 @@ class NanoTermV2 {
     // Buffer Management
     // -------------------------------------------------------------------------
 
-    getBuffer() {
-        return this.useAlternate ? this.alternateBuffer : this.primaryBuffer;
-    }
-
     switchToAlternateBuffer() {
         if (!this.useAlternate) {
-            this.alternateBuffer = this.createBuffer(this.rows);
+            this.primaryGrid = this.grid;
+            this.grid = this.allocGrid(this.cols, this.rows);
             this.useAlternate = true;
             this.scrollbackBuffer = [];
             this.scrollbackOffset = 0;
@@ -955,6 +1029,7 @@ class NanoTermV2 {
 
     switchToPrimaryBuffer() {
         if (this.useAlternate) {
+            this.grid = this.primaryGrid;
             this.useAlternate = false;
             this.scrollbackBuffer = [];
             this.scrollbackOffset = 0;
@@ -977,12 +1052,13 @@ class NanoTermV2 {
             this.wrapPending = false;
         }
 
-        const buffer = this.getBuffer();
-        if (this.cursorY >= 0 && this.cursorY < buffer.length &&
+        if (this.cursorY >= 0 && this.cursorY < this.rows &&
             this.cursorX >= 0 && this.cursorX < this.cols) {
-            buffer[this.cursorY][this.cursorX] = {
-                char: c, fg: this.curFg, bg: this.curBg, flags: this.curFlags
-            };
+            const off = (this.cursorY * this.cols + this.cursorX) * CELL_WORDS;
+            this.grid[off] = (c.codePointAt(0) << CELL_CP_SHIFT) | (this.curFlags & CELL_FLAGS_MASK);
+            this.grid[off + 1] = this.curFg;
+            this.grid[off + 2] = this.curBg;
+            this.grid[off + 3] = 0;
         }
 
         if (this.cursorX >= this.cols - 1) {
@@ -1012,45 +1088,60 @@ class NanoTermV2 {
     }
 
     scrollUp(n = 1) {
-        const buffer = this.getBuffer();
         const scrollTop = this.getScrollTop();
         const scrollBottom = this.getScrollBottom();
+        const rowWords = this.cols * CELL_WORDS;
         for (let i = 0; i < n; i++) {
-            const removed = buffer.splice(scrollTop, 1)[0];
+            // Save top row to scrollback (if in primary buffer)
             if (!this.useAlternate) {
-                this.scrollbackBuffer.push(removed);
+                this.scrollbackBuffer.push(this.extractRow(scrollTop));
                 if (this.scrollbackBuffer.length > this.options.scrollback) {
                     this.scrollbackBuffer.shift();
                 }
             }
-            buffer.splice(scrollBottom, 0, this.createBCELine());
+            // Shift region up by one row (native memcpy via copyWithin)
+            const srcStart = (scrollTop + 1) * rowWords;
+            const dstStart = scrollTop * rowWords;
+            const len = (scrollBottom - scrollTop) * rowWords;
+            this.grid.copyWithin(dstStart, srcStart, srcStart + len);
+            // Fill bottom row (BCE)
+            this.fillRow(scrollBottom, SPACE_CP, this.curFg, this.curBg, 0);
         }
     }
 
     scrollDown(n = 1) {
-        const buffer = this.getBuffer();
         const scrollTop = this.getScrollTop();
         const scrollBottom = this.getScrollBottom();
+        const rowWords = this.cols * CELL_WORDS;
         for (let i = 0; i < n; i++) {
-            buffer.splice(scrollBottom, 1);
-            buffer.splice(scrollTop, 0, this.createBCELine());
+            // Shift region down by one row
+            const srcStart = scrollTop * rowWords;
+            const len = (scrollBottom - scrollTop) * rowWords;
+            this.grid.copyWithin(srcStart + rowWords, srcStart, srcStart + len);
+            // Fill top row (BCE)
+            this.fillRow(scrollTop, SPACE_CP, this.curFg, this.curBg, 0);
         }
     }
 
     eraseDisplay(mode) {
-        const buffer = this.getBuffer();
         switch (mode) {
             case 0:
                 this.eraseLine(0);
-                for (let y = this.cursorY + 1; y < buffer.length; y++) buffer[y] = this.createBCELine();
+                for (let y = this.cursorY + 1; y < this.rows; y++) {
+                    this.fillRow(y, SPACE_CP, this.curFg, this.curBg, 0);
+                }
                 break;
             case 1:
                 this.eraseLine(1);
-                for (let y = 0; y < this.cursorY; y++) buffer[y] = this.createBCELine();
+                for (let y = 0; y < this.cursorY; y++) {
+                    this.fillRow(y, SPACE_CP, this.curFg, this.curBg, 0);
+                }
                 break;
             case 2:
             case 3:
-                for (let y = 0; y < buffer.length; y++) buffer[y] = this.createBCELine();
+                for (let y = 0; y < this.rows; y++) {
+                    this.fillRow(y, SPACE_CP, this.curFg, this.curBg, 0);
+                }
                 if (mode === 3 && !this.useAlternate) {
                     this.scrollbackBuffer = [];
                     this.scrollbackOffset = 0;
@@ -1060,71 +1151,84 @@ class NanoTermV2 {
     }
 
     eraseLine(mode) {
-        const buffer = this.getBuffer();
-        const row = buffer[this.cursorY];
-        if (!row) return;
+        if (this.cursorY < 0 || this.cursorY >= this.rows) return;
         switch (mode) {
             case 0:
-                for (let x = this.cursorX; x < this.cols; x++) row[x] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
+                this.fillRange(this.cursorY, this.cursorX, this.cols, SPACE_CP, this.curFg, this.curBg, 0);
                 break;
             case 1:
-                for (let x = 0; x <= this.cursorX; x++) row[x] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
+                this.fillRange(this.cursorY, 0, this.cursorX + 1, SPACE_CP, this.curFg, this.curBg, 0);
                 break;
             case 2:
-                buffer[this.cursorY] = this.createBCELine();
+                this.fillRow(this.cursorY, SPACE_CP, this.curFg, this.curBg, 0);
                 break;
         }
     }
 
     eraseChars(n) {
-        const row = this.getBuffer()[this.cursorY];
-        if (!row) return;
-        for (let i = 0; i < n && this.cursorX + i < this.cols; i++) {
-            row[this.cursorX + i] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
-        }
+        if (this.cursorY < 0 || this.cursorY >= this.rows) return;
+        this.fillRange(this.cursorY, this.cursorX, this.cursorX + n, SPACE_CP, this.curFg, this.curBg, 0);
     }
 
     insertChars(n) {
-        const row = this.getBuffer()[this.cursorY];
-        if (!row) return;
-        for (let i = row.length - 1; i >= this.cursorX + n; i--) row[i] = row[i - n];
-        for (let i = this.cursorX; i < this.cursorX + n && i < row.length; i++) {
-            row[i] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
-        }
+        if (this.cursorY < 0 || this.cursorY >= this.rows) return;
+        const rowOffset = this.cursorY * this.cols * CELL_WORDS;
+        const srcStart = rowOffset + this.cursorX * CELL_WORDS;
+        const dstStart = srcStart + n * CELL_WORDS;
+        const rowEnd = rowOffset + this.cols * CELL_WORDS;
+        // Shift right (copyWithin handles overlapping correctly)
+        this.grid.copyWithin(dstStart, srcStart, rowEnd - n * CELL_WORDS);
+        // Fill inserted positions with BCE
+        this.fillRange(this.cursorY, this.cursorX, Math.min(this.cursorX + n, this.cols), SPACE_CP, this.curFg, this.curBg, 0);
     }
 
     deleteChars(n) {
-        const row = this.getBuffer()[this.cursorY];
-        if (!row) return;
-        for (let i = this.cursorX; i < row.length - n; i++) row[i] = row[i + n];
-        for (let i = row.length - n; i < row.length; i++) row[i] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
+        if (this.cursorY < 0 || this.cursorY >= this.rows) return;
+        const rowOffset = this.cursorY * this.cols * CELL_WORDS;
+        const srcStart = rowOffset + (this.cursorX + n) * CELL_WORDS;
+        const dstStart = rowOffset + this.cursorX * CELL_WORDS;
+        const rowEnd = rowOffset + this.cols * CELL_WORDS;
+        // Shift left
+        this.grid.copyWithin(dstStart, srcStart, rowEnd);
+        // Fill tail with BCE
+        this.fillRange(this.cursorY, this.cols - n, this.cols, SPACE_CP, this.curFg, this.curBg, 0);
     }
 
     insertLines(n) {
-        const buffer = this.getBuffer();
         const scrollBottom = this.getScrollBottom();
+        const rowWords = this.cols * CELL_WORDS;
         for (let i = 0; i < n; i++) {
             if (this.cursorY <= scrollBottom) {
-                buffer.splice(scrollBottom, 1);
-                buffer.splice(this.cursorY, 0, this.createBCELine());
+                // Shift rows down from cursorY to scrollBottom-1
+                const srcStart = this.cursorY * rowWords;
+                const len = (scrollBottom - this.cursorY) * rowWords;
+                this.grid.copyWithin(srcStart + rowWords, srcStart, srcStart + len);
+                // Insert empty row at cursorY (BCE)
+                this.fillRow(this.cursorY, SPACE_CP, this.curFg, this.curBg, 0);
             }
         }
     }
 
     deleteLines(n) {
-        const buffer = this.getBuffer();
         const scrollBottom = this.getScrollBottom();
+        const rowWords = this.cols * CELL_WORDS;
         for (let i = 0; i < n; i++) {
             if (this.cursorY <= scrollBottom) {
-                buffer.splice(this.cursorY, 1);
-                buffer.splice(scrollBottom, 0, this.createBCELine());
+                // Shift rows up from cursorY+1 to scrollBottom
+                const srcStart = (this.cursorY + 1) * rowWords;
+                const dstStart = this.cursorY * rowWords;
+                const len = (scrollBottom - this.cursorY) * rowWords;
+                this.grid.copyWithin(dstStart, srcStart, srcStart + len);
+                // Fill bottom row (BCE)
+                this.fillRow(scrollBottom, SPACE_CP, this.curFg, this.curBg, 0);
             }
         }
     }
 
     clearScreen() {
-        const buffer = this.getBuffer();
-        for (let y = 0; y < buffer.length; y++) buffer[y] = this.createEmptyLine();
+        for (let y = 0; y < this.rows; y++) {
+            this.fillRow(y, SPACE_CP, COLOR_DEFAULT, COLOR_DEFAULT, 0);
+        }
         this.cursorX = 0;
         this.cursorY = 0;
     }
@@ -1179,10 +1283,9 @@ class NanoTermV2 {
         // the canvas font, so lastFont from the previous frame is stale
         this.lastFont = null;
 
-        const buffer = this.getBuffer();
         const scrollbackVisible = this.scrollbackOffset > 0 && !this.useAlternate;
 
-        // Collect all visible rows with their screen positions
+        // Collect all visible rows: { grid, gridCols, gridY, screenY }
         const visibleRows = [];
 
         if (scrollbackVisible) {
@@ -1191,29 +1294,28 @@ class NanoTermV2 {
             for (let i = 0; i < scrollbackRows; i++) {
                 const idx = scrollbackStart + i;
                 if (idx < this.scrollbackBuffer.length) {
-                    visibleRows.push({ row: this.scrollbackBuffer[idx], screenY: i });
+                    const sbRow = this.scrollbackBuffer[idx];
+                    visibleRows.push({ grid: sbRow, gridCols: sbRow.length / CELL_WORDS, gridY: 0, screenY: i });
                 }
             }
             const startRow = scrollbackRows;
             for (let y = 0; y < this.rows - startRow && y + startRow < this.rows; y++) {
-                const row = buffer[y];
-                if (row) visibleRows.push({ row, screenY: startRow + y });
+                visibleRows.push({ grid: this.grid, gridCols: this.cols, gridY: y, screenY: startRow + y });
             }
         } else {
             for (let y = 0; y < this.rows; y++) {
-                const row = buffer[y];
-                if (row) visibleRows.push({ row, screenY: y });
+                visibleRows.push({ grid: this.grid, gridCols: this.cols, gridY: y, screenY: y });
             }
         }
 
         // GLOBAL PASS 1: Draw ALL backgrounds first
-        for (const { row, screenY } of visibleRows) {
-            this.renderRowBg(row, screenY);
+        for (const vr of visibleRows) {
+            this.renderRowBg(vr.grid, vr.gridCols, vr.gridY, vr.screenY);
         }
 
         // GLOBAL PASS 2: Draw ALL text and decorations on top
-        for (const { row, screenY } of visibleRows) {
-            this.renderRowText(row, screenY);
+        for (const vr of visibleRows) {
+            this.renderRowText(vr.grid, vr.gridCols, vr.gridY, vr.screenY);
         }
 
         if (this.selection) this.renderSelection();
@@ -1222,38 +1324,76 @@ class NanoTermV2 {
         this.ctx.restore();
     }
 
-    renderRowBg(row, y) {
-        const baseline = y * this.charHeight;
+    // ── Color resolution helpers ────────────────────────────────────────────
+
+    _resolveBgRGBA(word0, fgRGBA, bgRGBA) {
+        const flags = word0 & CELL_FLAGS_MASK;
+        if (flags & ATTR.INVERSE) {
+            return fgRGBA === COLOR_DEFAULT ? this.themeFgRGBA : fgRGBA;
+        }
+        return bgRGBA === COLOR_DEFAULT ? this.themeBgRGBA : bgRGBA;
+    }
+
+    _resolveFgRGBA(word0, fgRGBA, bgRGBA) {
+        const flags = word0 & CELL_FLAGS_MASK;
+        if (flags & ATTR.INVERSE) {
+            return bgRGBA === COLOR_DEFAULT ? this.themeBgRGBA : bgRGBA;
+        }
+        return fgRGBA === COLOR_DEFAULT ? this.themeFgRGBA : fgRGBA;
+    }
+
+    renderRowBg(grid, gridCols, gridY, screenY) {
+        const baseline = screenY * this.charHeight;
+        const rowOffset = gridY * gridCols * CELL_WORDS;
+        const renderCols = Math.min(gridCols, this.cols);
+
         let bgStart = 0;
-        let currentBgColor = this.resolveRowBg(row[0], row[0]?.flags ?? 0);
-        for (let col = 0; col <= this.cols; col++) {
-            const cell = row[col];
-            const cellBg = this.resolveRowBg(cell, cell?.flags ?? 0);
-            if (cellBg !== currentBgColor || col === this.cols) {
-                this.ctx.fillStyle = currentBgColor;
+        let off = rowOffset;
+        let currentBg = this._resolveBgRGBA(grid[off], grid[off + 1], grid[off + 2]);
+
+        for (let col = 1; col <= renderCols; col++) {
+            let cellBg;
+            if (col < renderCols) {
+                off = rowOffset + col * CELL_WORDS;
+                cellBg = this._resolveBgRGBA(grid[off], grid[off + 1], grid[off + 2]);
+            } else {
+                cellBg = ~currentBg >>> 0; // force flush
+            }
+            if (cellBg !== currentBg) {
+                this.ctx.fillStyle = rgbaToCSS(currentBg);
                 this.ctx.fillRect(bgStart * this.charWidth, baseline, (col - bgStart) * this.charWidth, this.charHeight);
                 bgStart = col;
-                currentBgColor = cellBg;
+                currentBg = cellBg;
             }
         }
     }
 
-    renderRowText(row, y) {
-        const baseline = y * this.charHeight;
+    renderRowText(grid, gridCols, gridY, screenY) {
+        const baseline = screenY * this.charHeight;
+        const rowOffset = gridY * gridCols * CELL_WORDS;
+        const renderCols = Math.min(gridCols, this.cols);
+
         let runStart = 0;
-        let currentFg = row[0]?.fg ?? 256;
-        let currentBg = row[0]?.bg ?? 256;
-        let currentFlags = row[0]?.flags ?? 0;
+        let off = rowOffset;
+        let currentFg = grid[off + 1];
+        let currentBg = grid[off + 2];
+        let currentFlags = grid[off] & CELL_FLAGS_MASK;
 
-        for (let col = 0; col <= this.cols; col++) {
-            const cell = row[col];
-            const fg = cell?.fg ?? 256;
-            const bg = cell?.bg ?? 256;
-            const flags = cell?.flags ?? 0;
-
-            if (fg !== currentFg || bg !== currentBg || flags !== currentFlags || col === this.cols) {
+        for (let col = 1; col <= renderCols; col++) {
+            let fg, bg, flags;
+            if (col < renderCols) {
+                off = rowOffset + col * CELL_WORDS;
+                fg = grid[off + 1];
+                bg = grid[off + 2];
+                flags = grid[off] & CELL_FLAGS_MASK;
+            } else {
+                fg = ~currentFg >>> 0; // force flush
+                bg = 0;
+                flags = 0;
+            }
+            if (fg !== currentFg || bg !== currentBg || flags !== currentFlags) {
                 if (col > runStart) {
-                    this.renderRunText(row, runStart, col - runStart, baseline, currentFg, currentBg, currentFlags);
+                    this.renderRunText(grid, gridCols, gridY, runStart, col - runStart, baseline, currentFg, currentBg, currentFlags);
                 }
                 runStart = col;
                 currentFg = fg;
@@ -1263,22 +1403,15 @@ class NanoTermV2 {
         }
     }
 
-    resolveRowBg(cell, flags) {
-        const fg = cell?.fg ?? 256;
-        const bg = cell?.bg ?? 256;
-        // For inverse, map default fg (256) to theme foreground color
-        if (flags & ATTR.INVERSE) return fg === 256 ? this.colors.foreground : this.getColor(fg);
-        if (bg !== 256) return this.getColor(bg);
-        return this.colors.background;
-    }
+    renderRunText(grid, gridCols, gridY, startX, length, baseline, fgRGBA, bgRGBA, flags) {
+        // Backgrounds are already drawn in renderRowBg pass
+        const rowOffset = gridY * gridCols * CELL_WORDS;
 
-    renderRunText(row, startX, length, baseline, fg, bg, flags) {
-        // Backgrounds are already drawn in renderRow pass 1
-
-        // Collect text
+        // Check for non-space content
         let hasContent = false;
         for (let x = startX; x < startX + length; x++) {
-            if ((row[x]?.char || ' ') !== ' ') {
+            const cp = grid[rowOffset + x * CELL_WORDS] >>> CELL_CP_SHIFT;
+            if (cp !== SPACE_CP && cp !== 0) {
                 hasContent = true;
                 break;
             }
@@ -1288,10 +1421,9 @@ class NanoTermV2 {
             return;
         }
 
-        // Text color — for inverse, map default bg (256) to theme background
-        const textColor = (flags & ATTR.INVERSE)
-            ? (bg === 256 ? this.colors.background : this.getColor(bg))
-            : this.getColor(fg);
+        // Text color — resolve via RGBA helpers
+        const textColorRGBA = this._resolveFgRGBA(flags, fgRGBA, bgRGBA);
+        const textColor = rgbaToCSS(textColorRGBA);
         this.ctx.fillStyle = textColor;
 
         // Font style
@@ -1310,15 +1442,15 @@ class NanoTermV2 {
 
         // Render each character at its exact cell position to prevent drift
         for (let i = 0; i < length; i++) {
-            const ch = row[startX + i]?.char || ' ';
-            if (ch === ' ') continue;
+            const off = rowOffset + (startX + i) * CELL_WORDS;
+            const cp = grid[off] >>> CELL_CP_SHIFT;
+            if (cp === SPACE_CP || cp === 0) continue;
             const cx = (startX + i) * this.charWidth;
-            const cp = ch.codePointAt(0);
             // Programmatic rendering for block elements, box drawing, and braille
             if (cp >= 0x2500 && this.renderSpecialChar(cp, cx, baseline, textColor)) continue;
             // Skip unrenderable glyphs (tofu prevention)
             if (!this._isGlyphRenderable(cp)) continue;
-            this.ctx.fillText(ch, cx, baseline);
+            this.ctx.fillText(String.fromCodePoint(cp), cx, baseline);
         }
 
         // Underline
@@ -1504,14 +1636,7 @@ class NanoTermV2 {
         return true;
     }
 
-    getColor(index) {
-        if (index === 256) return this.colors.foreground;
-        if (index === 257) return this.colors.background;
-        if (index >= 0 && index < this.colors.palette.length) {
-            return this.colors.palette[index];
-        }
-        return this.colors.foreground;
-    }
+    // getColor is no longer needed — colors are resolved via _resolveFgRGBA/_resolveBgRGBA + rgbaToCSS
 
     renderCursor() {
         const x = this.cursorX * this.charWidth;
@@ -1534,19 +1659,22 @@ class NanoTermV2 {
             default:
                 if (this.cursorBlinkState) {
                     this.ctx.fillRect(x, adjustedY, this.charWidth, this.charHeight);
-                    const buffer = this.getBuffer();
-                    const cell = buffer[this.cursorY]?.[this.cursorX];
-                    if (cell && cell.char !== ' ') {
+                    // Decode character under cursor from packed grid
+                    const off = (this.cursorY * this.cols + this.cursorX) * CELL_WORDS;
+                    const word0 = this.grid[off];
+                    const cp = word0 >>> CELL_CP_SHIFT;
+                    const cellFlags = word0 & CELL_FLAGS_MASK;
+                    if (cp !== SPACE_CP && cp !== 0) {
                         this.ctx.fillStyle = this.colors.background;
                         // Build font string respecting cell's SGR flags (bold/italic)
                         const cursorFontParts = [];
-                        if (cell.flags & ATTR.BOLD) cursorFontParts.push('bold');
-                        if (cell.flags & ATTR.ITALIC) cursorFontParts.push('italic');
+                        if (cellFlags & ATTR.BOLD) cursorFontParts.push('bold');
+                        if (cellFlags & ATTR.ITALIC) cursorFontParts.push('italic');
                         cursorFontParts.push(`${this.options.fontSize}px`);
                         cursorFontParts.push(this.options.fontFamily);
                         this.ctx.font = cursorFontParts.join(' ');
                         this.ctx.textBaseline = 'top';
-                        this.ctx.fillText(cell.char, x, adjustedY);
+                        this.ctx.fillText(String.fromCodePoint(cp), x, adjustedY);
                     }
                     // Invalidate font cache — renderCursor changed ctx.font
                     // without going through the renderRunText caching path
@@ -1791,16 +1919,18 @@ class NanoTermV2 {
 
     getSelection() {
         if (!this.selection) return '';
-        const buffer = this.getBuffer();
         const { startRow, endRow, startCol, endCol } = this.selection;
         const lines = [];
         for (let y = startRow; y <= endRow; y++) {
-            const row = buffer[y];
-            if (!row) continue;
+            if (y < 0 || y >= this.rows) continue;
             const sx = y === startRow ? startCol : 0;
             const ex = y === endRow ? endCol : this.cols;
             let line = '';
-            for (let x = sx; x < ex; x++) line += row[x]?.char || ' ';
+            for (let x = sx; x < ex; x++) {
+                const off = (y * this.cols + x) * CELL_WORDS;
+                const cp = this.grid[off] >>> CELL_CP_SHIFT;
+                line += (cp > 0 && cp !== SPACE_CP) ? String.fromCodePoint(cp) : ' ';
+            }
             lines.push(line.trimEnd());
         }
         return lines.join('\n');
