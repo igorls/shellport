@@ -9,6 +9,10 @@ export default defineConfig({
   ],
   themeConfig: {
     logo: '/shellport/logo.png',
+    editLink: {
+      pattern: 'https://github.com/igorls/shellport/edit/main/docs/:path',
+      text: 'Edit this page on GitHub'
+    },
     nav: [
       { text: 'Home', link: '/shellport/' },
       { text: 'Getting Started', link: '/shellport/getting-started' },
