@@ -54,6 +54,13 @@ export default defineConfig({
           { text: 'Architecture', link: '/shellport/internals/architecture' },
           { text: 'Security Model', link: '/shellport/internals/security' }
         ]
+      },
+      {
+        text: 'Comparison',
+        collapsible: true,
+        items: [
+          { text: 'Comparison', link: '/shellport/comparison' }
+        ]
       }
     ],
     search: {
