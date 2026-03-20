@@ -561,6 +561,7 @@ export class WebGLRenderer {
         const data = new Uint32Array(count * 4);
         for (let i = 0; i < count; i++) {
             const seg = BOX_DRAWING_SEGMENTS[i];
+            if (!seg) continue; // null entries (rounded corners, diagonals) → zeros
             data[i * 4 + 0] = seg[0]; // left weight
             data[i * 4 + 1] = seg[1]; // right weight
             data[i * 4 + 2] = seg[2]; // up weight

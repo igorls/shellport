@@ -45,6 +45,7 @@
 <body>
     <header>
         <span class="title">🧪 ShellPort Standalone Test</span>
+        <span id="renderer" class="status" style="color:#f59e0b;">renderer: ?</span>
         <span id="status" class="status">Connecting…</span>
     </header>
     <div id="terminal-container"></div>
@@ -85,6 +86,13 @@
                     selection: 'rgba(167, 139, 250, 0.3)',
                 },
             });
+
+            // Show which renderer is active
+            const rendererName = term.renderer?.constructor?.name || 'Unknown';
+            const rendererEl = document.getElementById('renderer');
+            rendererEl.textContent = 'renderer: ' + rendererName;
+            rendererEl.style.color = rendererName.includes('WebGL') ? '#4ade80' : '#f59e0b';
+            console.log('[ShellPort Test] Active renderer:', rendererName);
 
             // Wire resize → server
             term.onResize = (cols, rows) => {

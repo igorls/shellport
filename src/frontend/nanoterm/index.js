@@ -183,9 +183,7 @@ class NanoTermV2 {
                 });
                 return renderer;
             } catch (err) {
-                if (mode === 'webgl') {
-                    console.error('[NanoTermV2] WebGL2 not available:', err.message);
-                }
+                console.warn('[NanoTermV2] WebGL2 renderer failed, falling back to Canvas2D:', err.message, err);
                 // Fall through to Canvas2D
             }
         }
