@@ -7,6 +7,7 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', href: '/shellport/logo.png' }]
   ],
+  ignoreDeadLinks: true,
   themeConfig: {
     logo: '/shellport/logo.png',
     editLink: {
@@ -34,9 +35,10 @@ export default defineConfig({
         text: 'Guides',
         collapsible: true,
         items: [
-          { text: 'Encryption', link: '/shellport/guides/encryption' },
+          { text: 'Basic Usage', link: '/shellport/guides/basic-usage' },
+          { text: 'Security', link: '/shellport/guides/security' },
           { text: 'TOTP 2FA', link: '/shellport/guides/totp' },
-          { text: 'CLI Client', link: '/shellport/guides/cli-client' }
+          { text: 'Tailscale Integration', link: '/shellport/guides/tailscale' }
         ]
       },
       {

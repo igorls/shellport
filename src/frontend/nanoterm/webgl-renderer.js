@@ -246,59 +246,61 @@ void main() {
         else {
             float thinW = 1.0 / u_charSize.x;
             float thinH = 1.0 / u_charSize.y;
-            float lineW = max(thinW, thinH); // uniform line weight for arcs
             bool hit = false;
 
             if (codepoint >= 0x256Du && codepoint <= 0x2570u) {
-                // Rounded corners — quarter circle arcs connecting edge midpoints
-                // Arc radius = 0.5 in UV. Center at the opposite corner.
-                // Use aspect-corrected distance for non-square cells.
-                float aspect = u_charSize.x / u_charSize.y;
+                // Rounded corners — quarter circle arcs in pixel space
+                // Work in pixel coordinates for correct aspect ratio
+                vec2 px = localUV * u_charSize;  // pixel position within cell
+                float halfW = u_charSize.x * 0.5;
+                float halfH = u_charSize.y * 0.5;
                 vec2 center;
                 bool inQuadrant = false;
 
                 if (codepoint == 0x256Du) {
-                    // ╭ top-left corner: arc from bottom-center to right-center
-                    center = vec2(1.0, 1.0);
-                    inQuadrant = (localUV.x <= 0.5 || localUV.y <= 0.5);
+                    // ╭ top-left corner: arc center at bottom-right
+                    center = u_charSize;
+                    inQuadrant = (px.x <= halfW && px.y <= halfH);
                 } else if (codepoint == 0x256Eu) {
-                    // ╮ top-right corner: arc from bottom-center to left-center
-                    center = vec2(0.0, 1.0);
-                    inQuadrant = (localUV.x >= 0.5 || localUV.y <= 0.5);
+                    // ╮ top-right corner: arc center at bottom-left
+                    center = vec2(0.0, u_charSize.y);
+                    inQuadrant = (px.x >= halfW && px.y <= halfH);
                 } else if (codepoint == 0x256Fu) {
-                    // ╯ bottom-right corner: arc from top-center to left-center
+                    // ╯ bottom-right corner: arc center at top-left
                     center = vec2(0.0, 0.0);
-                    inQuadrant = (localUV.x >= 0.5 || localUV.y >= 0.5);
+                    inQuadrant = (px.x >= halfW && px.y >= halfH);
                 } else {
-                    // ╰ bottom-left corner: arc from top-center to right-center
-                    center = vec2(1.0, 0.0);
-                    inQuadrant = (localUV.x <= 0.5 || localUV.y >= 0.5);
+                    // ╰ bottom-left corner: arc center at top-right
+                    center = vec2(u_charSize.x, 0.0);
+                    inQuadrant = (px.x <= halfW && px.y >= halfH);
                 }
 
                 if (inQuadrant) {
-                    // Aspect-corrected distance to arc center
-                    vec2 d = localUV - center;
-                    d.x *= aspect;
-                    float dist = length(d);
-                    float radius = 0.5 * aspect; // radius in aspect-corrected space
-                    if (abs(dist - radius) < lineW * aspect * 0.6) hit = true;
+                    float dist = length(px - center);
+                    // Radius reaches to cell edge midpoints
+                    float radius = min(halfW, halfH);
+                    // Use same thickness as straight segments (1px)
+                    if (abs(dist - radius) < 0.8) hit = true;
                 }
             }
             else if (codepoint == 0x2571u) {
                 // ╱ Forward diagonal
-                float d = abs(localUV.x + localUV.y - 1.0);
-                if (d < lineW * 0.7) hit = true;
+                vec2 px = localUV * u_charSize;
+                float d = abs(px.x / u_charSize.x + px.y / u_charSize.y - 1.0);
+                if (d < thinH * 0.7) hit = true;
             }
             else if (codepoint == 0x2572u) {
                 // ╲ Back diagonal
-                float d = abs(localUV.x - localUV.y);
-                if (d < lineW * 0.7) hit = true;
+                vec2 px = localUV * u_charSize;
+                float d = abs(px.x / u_charSize.x - px.y / u_charSize.y);
+                if (d < thinH * 0.7) hit = true;
             }
             else if (codepoint == 0x2573u) {
                 // ╳ Cross diagonal
-                float d1 = abs(localUV.x + localUV.y - 1.0);
-                float d2 = abs(localUV.x - localUV.y);
-                if (d1 < lineW * 0.7 || d2 < lineW * 0.7) hit = true;
+                vec2 px = localUV * u_charSize;
+                float d1 = abs(px.x / u_charSize.x + px.y / u_charSize.y - 1.0);
+                float d2 = abs(px.x / u_charSize.x - px.y / u_charSize.y);
+                if (d1 < thinH * 0.7 || d2 < thinH * 0.7) hit = true;
             }
 
             if (hit) color = fgColor;
