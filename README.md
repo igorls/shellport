@@ -40,6 +40,14 @@ Most web terminal tools either force you to haul in xterm.js + a Node.js runtime
 
 ## Features
 
+- **NanoTermV2** — Custom Canvas2D terminal emulator (~50 KB, zero dependencies)
+- **E2E Encryption** — AES-256-GCM with PBKDF2 key derivation
+- **TOTP 2FA** — RFC 6238 time-based one-time passwords
+- **Multi-Session Tabs** — tmux-style sidebar for multiple PTY sessions
+- **Zero Dependencies** — Single binary, no node_modules at runtime
+- **Cross-Platform** — Linux, macOS, Windows via Bun compiler
+- **Tailscale Ready** — Built-in serve/funnel integration
+
 ## Security
 
 ShellPort is designed with security-first principles:
@@ -119,7 +127,9 @@ shellport server --totp-reset
 
 > ⚠️ **For production use**, keep TOTP enabled (it's on by default) and keep approval mode on. Use `--no-secret` only with TOTP over a VPN, or on isolated trusted networks.
 
-### 🖥️ NanoTermV2 — Canvas Terminal Emulator
+---
+
+## 🖥️ NanoTermV2 — Canvas Terminal Emulator
 - **Canvas2D** hardware-accelerated rendering (no DOM nodes)
 - VT100 / VT220 / xterm escape sequence parsing
 - 256-color + **truecolor** (24-bit) support
@@ -130,7 +140,7 @@ shellport server --totp-reset
 - UTF-8 streaming decoder
 - **~50 KB** — usable as a standalone library
 
-### 📡 Server & Connectivity
+## 📡 Server & Connectivity
 - Native **Bun PTY** API — true terminal, zero-latency
 - WebSocket binary framing with sequenced message ordering
 - Multi-session support with **tmux-style sidebar tabs**
@@ -138,7 +148,7 @@ shellport server --totp-reset
 - **Tailscale** integration — `serve` or `funnel` in one flag
 - CLI client for terminal-to-terminal connections
 
-### 📦 Zero Friction
+## 📦 Zero Friction
 - **Zero runtime dependencies** — only `@types/bun` for development
 - Cross-compiled single binaries for Linux, macOS, and Windows
 - ~2,400 lines of TypeScript + JavaScript total
@@ -196,7 +206,7 @@ shellport server --no-secret
 shellport server --secret your-secret-here
 
 # Plaintext mode (trusted network only)
-shellport server --no-secret
+shellport server --no-secret --no-totp
 
 # Custom port
 shellport server --port 8080
@@ -326,8 +336,12 @@ src/
 └── frontend/
     ├── index.html    # HTML shell
     ├── styles.css    # Terminal + sidebar UI styles
-    ├── nanoterm.js   # Canvas terminal emulator (standalone library)
+    ├── nanoterm/     # Standalone terminal library (Canvas backend)
+    │   ├── index.js           # NanoTermV2 terminal emulator
+    │   ├── canvas-renderer.js # Canvas2D backend renderer
+    │   └── constants.js       # Palettes, layout, utilities
     ├── app.js        # Session manager & UI logic
+    ├── bundle.ts     # NanoTermV2 ES module bundler
     └── build.ts      # HTML assembler (inlines all assets)
 ```
 

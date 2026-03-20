@@ -16,7 +16,7 @@ const TEST_PORT = 17681 + Math.floor(Math.random() * 1000);
 const BASE = `http://localhost:${TEST_PORT}`;
 
 beforeAll(async () => {
-    const htmlClient = buildHTML(getCryptoJS());
+    const htmlClient = await buildHTML(getCryptoJS());
 
     server = Bun.serve({
         port: TEST_PORT,

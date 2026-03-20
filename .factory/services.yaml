@@ -1,0 +1,10 @@
+commands:
+  install: bun install
+  build: bun build ./src/index.ts --compile --minify --bytecode --outfile shellport
+  test: bun test
+  typecheck: bunx tsc --noEmit
+  docs:dev: bunx vitepress dev docs
+  docs:build: bunx vitepress build docs
+  docs:preview: bunx vitepress preview docs
+
+services: {}

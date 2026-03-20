@@ -156,8 +156,14 @@ function createSession() {
         sendMsg(0, encoder.encode(data));
     });
 
+    let pendingResize = null;
+
     term.onResize = (cols, rows) => {
-        if (!handshakeComplete) return;
+        if (!handshakeComplete) {
+            // Font may load before handshake — queue resize for flush after connect
+            pendingResize = { cols, rows };
+            return;
+        }
         sendMsg(1, new TextEncoder().encode(JSON.stringify({ type: 'resize', cols, rows })));
         updateStatusBar(id);
     };
@@ -242,6 +248,11 @@ function createSession() {
             }
             term.write('\x1b[2K\x1b[G');
             term.resize();
+            // Flush any resize queued during handshake (e.g. font-load correction)
+            if (pendingResize) {
+                sendMsg(1, new TextEncoder().encode(JSON.stringify({ type: 'resize', cols: pendingResize.cols, rows: pendingResize.rows })));
+                pendingResize = null;
+            }
             term.canvas.focus();
 
             // Fall through to handle this message as data
@@ -267,6 +278,11 @@ function createSession() {
                     }
                     term.write('\x1b[2K\x1b[G');
                     term.resize();
+                    // Flush any resize queued during handshake (e.g. font-load correction)
+                    if (pendingResize) {
+                        sendMsg(1, new TextEncoder().encode(JSON.stringify({ type: 'resize', cols: pendingResize.cols, rows: pendingResize.rows })));
+                        pendingResize = null;
+                    }
                     term.canvas.focus();
                 }
                 term.write(decoded.payload);
