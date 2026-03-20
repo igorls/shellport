@@ -76,9 +76,12 @@ const server = Bun.serve({
             if (isWindows) {
                 // Windows: use piped stdin/stdout (no PTY support in Bun)
                 const shellCmd = process.env.COMSPEC || 'cmd.exe';
+                const shellArgs = shellCmd.toLowerCase().includes('cmd') 
+                    ? [shellCmd] 
+                    : [shellCmd, '-NoLogo', '-NoExit'];
                 console.log(`🐚 [Test] Client ${ws.data.id} connected — spawning shell (piped): ${shellCmd}`);
 
-                const proc = Bun.spawn([shellCmd], {
+                const proc = Bun.spawn(shellArgs, {
                     cwd: process.env.USERPROFILE || process.env.HOME || 'C:\\',
                     env: {
                         ...process.env,
@@ -152,10 +155,25 @@ const server = Bun.serve({
                     if (terminal) terminal.write(message);
                 }
             } else {
-                // Piped mode (Windows)
+                // Piped mode (Windows) — implement basic line discipline for echo
                 if (typeof message !== 'string') {
+                    const bytes = new Uint8Array(message as ArrayBuffer);
                     try {
-                        proc.stdin?.write(new TextDecoder().decode(message as ArrayBuffer));
+                        proc.stdin?.write(bytes);
+                        // Smart echo: handle control characters properly
+                        for (const byte of bytes) {
+                            if (byte === 0x7F || byte === 0x08) {
+                                // Backspace: move cursor back, overwrite with space, move back
+                                if (ws.readyState === 1) ws.send(new Uint8Array([0x08, 0x20, 0x08]));
+                            } else if (byte === 0x0D) {
+                                // Enter: echo CR+LF
+                                if (ws.readyState === 1) ws.send(new Uint8Array([0x0D, 0x0A]));
+                            } else if (byte >= 0x20) {
+                                // Printable characters: echo as-is
+                                if (ws.readyState === 1) ws.send(new Uint8Array([byte]));
+                            }
+                            // Other control chars (Tab, Escape, etc.): don't echo
+                        }
                     } catch { /* process exited */ }
                     return;
                 }
@@ -166,9 +184,11 @@ const server = Bun.serve({
                         return;
                     }
                 } catch { /* not JSON */ }
-                // Write text input to stdin
+                // Write text input to stdin + echo
                 try {
-                    proc.stdin?.write(message);
+                    const encoded = new TextEncoder().encode(message);
+                    proc.stdin?.write(encoded);
+                    if (ws.readyState === 1) ws.send(encoded);
                 } catch { /* process exited */ }
             }
         },
