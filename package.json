@@ -8,11 +8,12 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./nanoterm": "./src/frontend/nanoterm.js"
+    "./nanoterm": "./src/frontend/nanoterm/index.js"
   },
   "scripts": {
     "dev": "bun run src/index.ts server --dev",
     "build": "bun build ./src/index.ts --compile --minify --bytecode --outfile shellport",
+    "build:frontend": "bun run src/frontend/bundle.ts",
     "build:binaries": "bun run scripts/build-binaries.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"

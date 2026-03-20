@@ -176,7 +176,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         });
     }
 
-    const htmlClient = buildHTML(getCryptoJS());
+    const htmlClient = await buildHTML(getCryptoJS());
 
     Bun.serve({
         port: config.port,

@@ -79,7 +79,7 @@ const server = Bun.serve({
                 console.log(`🐚 [Test] Client ${ws.data.id} connected — spawning shell (piped): ${shellCmd}`);
 
                 const proc = Bun.spawn([shellCmd], {
-                    cwd: process.env.USERPROFILE || process.env.HOME || 'C:\\',
+                    cwd: process.cwd(),
                     env: {
                         ...process.env,
                         TERM: 'xterm-256color',
@@ -101,7 +101,7 @@ const server = Bun.serve({
                 console.log(`🐚 [Test] Client ${ws.data.id} connected — spawning PTY: ${shellCmd}`);
 
                 const proc = Bun.spawn([shellCmd], {
-                    cwd: process.env.HOME || '/tmp',
+                    cwd: process.cwd(),
                     env: {
                         ...process.env,
                         TERM: 'xterm-256color',
