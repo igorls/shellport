@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShellPort Test — NanoTermV2 Standalone</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a0f;
+            color: #e4e4e7;
+            font-family: system-ui, -apple-system, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            padding: 8px 16px;
+            background: #15151f;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+        }
+        header .title {
+            font-weight: 600;
+            color: #a78bfa;
+        }
+        header .status {
+            color: #71717a;
+        }
+        header .status.connected { color: #4ade80; }
+        header .status.error { color: #ef4444; }
+        #terminal-container {
+            flex: 1;
+            padding: 4px;
+            overflow: hidden;
+        }
+        .term-canvas {
+            outline: none;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <span class="title">🧪 ShellPort Standalone Test</span>
+        <span id="status" class="status">Connecting…</span>
+    </header>
+    <div id="terminal-container"></div>
+
+    <script src="/vendor/nanoterm.js"></script>
+    <script>
+        const statusEl = document.getElementById('status');
+        const container = document.getElementById('terminal-container');
+
+        // Connect WebSocket
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+        ws.binaryType = 'arraybuffer';
+
+        // Create NanoTermV2 once connected
+        let term = null;
+
+        ws.onopen = () => {
+            statusEl.textContent = '● Connected';
+            statusEl.className = 'status connected';
+
+            term = new NanoTermV2(container, (data) => {
+                // Send keystrokes as binary
+                if (typeof data === 'string') {
+                    const encoded = new TextEncoder().encode(data);
+                    ws.send(encoded);
+                } else {
+                    ws.send(data);
+                }
+            }, {
+                fontSize: 14,
+                cursorBlink: true,
+                scrollback: 10000,
+                theme: {
+                    background: '#0a0a0f',
+                    foreground: '#e4e4e7',
+                    cursor: '#a78bfa',
+                    selection: 'rgba(167, 139, 250, 0.3)',
+                },
+            });
+
+            // Wire resize → server
+            term.onResize = (cols, rows) => {
+                ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+            };
+
+            // Send initial size
+            if (term.cols && term.rows) {
+                ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+            }
+
+            term.canvas.focus();
+        };
+
+        ws.onmessage = (event) => {
+            if (!term) return;
+            if (event.data instanceof ArrayBuffer) {
+                term.write(new Uint8Array(event.data));
+            } else {
+                term.write(event.data);
+            }
+        };
+
+        ws.onclose = () => {
+            statusEl.textContent = '● Disconnected';
+            statusEl.className = 'status error';
+        };
+
+        ws.onerror = () => {
+            statusEl.textContent = '● Connection Error';
+            statusEl.className = 'status error';
+        };
+    </script>
+</body>
+</html>
