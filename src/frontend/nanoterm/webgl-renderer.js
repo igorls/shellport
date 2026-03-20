@@ -242,17 +242,66 @@ void main() {
 
             if (hit) color = fgColor;
         }
-        // If all weights are 0, this is a null entry (╭╮╯╰, ╱╲╳)
-        // → fall through to atlas text rendering below
-        else if (codepoint > 32u && atlasIdx > 0u) {
-            uint atlasX = (atlasIdx - 1u) % uint(u_atlasGridSize);
-            uint atlasY = (atlasIdx - 1u) / uint(u_atlasGridSize);
-            vec2 atlasUV = vec2(
-                (float(atlasX) * u_atlasCellSize.x + localUV.x * u_atlasCellSize.x) / u_atlasTexSize.x,
-                (float(atlasY) * u_atlasCellSize.y + localUV.y * u_atlasCellSize.y) / u_atlasTexSize.y
-            );
-            vec4 glyph = texture(u_atlasTex, atlasUV);
-            color = mix(color, fgColor, glyph.a);
+        // Null entries: procedural rounded corners + diagonals
+        else {
+            float thinW = 1.0 / u_charSize.x;
+            float thinH = 1.0 / u_charSize.y;
+            float lineW = max(thinW, thinH); // uniform line weight for arcs
+            bool hit = false;
+
+            if (codepoint >= 0x256Du && codepoint <= 0x2570u) {
+                // Rounded corners — quarter circle arcs connecting edge midpoints
+                // Arc radius = 0.5 in UV. Center at the opposite corner.
+                // Use aspect-corrected distance for non-square cells.
+                float aspect = u_charSize.x / u_charSize.y;
+                vec2 center;
+                bool inQuadrant = false;
+
+                if (codepoint == 0x256Du) {
+                    // ╭ top-left corner: arc from bottom-center to right-center
+                    center = vec2(1.0, 1.0);
+                    inQuadrant = (localUV.x <= 0.5 || localUV.y <= 0.5);
+                } else if (codepoint == 0x256Eu) {
+                    // ╮ top-right corner: arc from bottom-center to left-center
+                    center = vec2(0.0, 1.0);
+                    inQuadrant = (localUV.x >= 0.5 || localUV.y <= 0.5);
+                } else if (codepoint == 0x256Fu) {
+                    // ╯ bottom-right corner: arc from top-center to left-center
+                    center = vec2(0.0, 0.0);
+                    inQuadrant = (localUV.x >= 0.5 || localUV.y >= 0.5);
+                } else {
+                    // ╰ bottom-left corner: arc from top-center to right-center
+                    center = vec2(1.0, 0.0);
+                    inQuadrant = (localUV.x <= 0.5 || localUV.y >= 0.5);
+                }
+
+                if (inQuadrant) {
+                    // Aspect-corrected distance to arc center
+                    vec2 d = localUV - center;
+                    d.x *= aspect;
+                    float dist = length(d);
+                    float radius = 0.5 * aspect; // radius in aspect-corrected space
+                    if (abs(dist - radius) < lineW * aspect * 0.6) hit = true;
+                }
+            }
+            else if (codepoint == 0x2571u) {
+                // ╱ Forward diagonal
+                float d = abs(localUV.x + localUV.y - 1.0);
+                if (d < lineW * 0.7) hit = true;
+            }
+            else if (codepoint == 0x2572u) {
+                // ╲ Back diagonal
+                float d = abs(localUV.x - localUV.y);
+                if (d < lineW * 0.7) hit = true;
+            }
+            else if (codepoint == 0x2573u) {
+                // ╳ Cross diagonal
+                float d1 = abs(localUV.x + localUV.y - 1.0);
+                float d2 = abs(localUV.x - localUV.y);
+                if (d1 < lineW * 0.7 || d2 < lineW * 0.7) hit = true;
+            }
+
+            if (hit) color = fgColor;
         }
     }
     // ── Procedural braille (U+2800–U+28FF) ──
@@ -631,13 +680,7 @@ export class WebGLRenderer {
      */
     _getAtlasIndex(cp, flags) {
         // Skip special characters (rendered procedurally in shader)
-        // But allow null entries in BOX_DRAWING_SEGMENTS (rounded corners, diagonals) through
-        if (cp >= 0x2500 && cp <= 0x257F) {
-            const seg = BOX_DRAWING_SEGMENTS[cp - 0x2500];
-            if (seg !== null) return 0; // Has segment data → procedural
-            // null → fall through to atlas (font-rendered curves/diagonals)
-        }
-        if (cp >= 0x2580 && cp <= 0x259F) return 0;
+        if (cp >= 0x2500 && cp <= 0x259F) return 0;
         if (cp >= 0x2800 && cp <= 0x28FF) return 0;
         if (cp === SPACE_CP || cp === 0) return 0;
 
@@ -883,12 +926,8 @@ export class WebGLRenderer {
             const flags = word0 & CELL_FLAGS_MASK;
 
             if (cp <= 32) continue;
-            // Skip procedural chars — but allow null box entries through
-            if (cp >= 0x2500 && cp <= 0x257F) {
-                const seg = BOX_DRAWING_SEGMENTS[cp - 0x2500];
-                if (seg !== null) continue; // procedural → skip atlas
-                // null → needs atlas
-            } else if (cp >= 0x2580 && cp <= 0x259F) continue;
+            // Skip procedural chars
+            if (cp >= 0x2500 && cp <= 0x259F) continue;
             if (cp >= 0x2800 && cp <= 0x28FF) continue;
 
             const atlasIdx = this._getAtlasIndex(cp, flags);
