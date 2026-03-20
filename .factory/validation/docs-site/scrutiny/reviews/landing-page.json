@@ -1,0 +1,21 @@
+{
+  "featureId": "landing-page",
+  "reviewedAt": "2026-03-20T21:18:00.000Z",
+  "commitId": "bb836d88d2805a667118cd73edb516f7611cfe00",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Implementation fully covers the feature requirements. The landing page has been updated with a hero section displaying the ShellPort name, exact tagline 'Encrypted terminal-over-the-web in a single binary', Get Started button linking to /getting-started/installation, GitHub button opening in new tab, and a features grid with all 6 specified features in correct order. The worker encountered and fixed an issue where Get Started link was double-prefixed with /shellport/shellport/, correctly resolving it to /getting-started/installation.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "Worker noted that .factory/services.yaml was missing from expected location (~/.factory vs repo root), but the repo has .factory at /home/igorls/dev/GitHub/shellport/.factory/. The worker didn't reference services.yaml during implementation.",
+      "evidence": "Transcript shows 'Error reading file: ENOENT: /home/igorls/.factory/services.yaml' when worker tried to read it at task end"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Review passed. The landing-page feature was implemented correctly: docs/index.md exists with a proper VitePress hero section containing ShellPort name, exact tagline 'Encrypted terminal-over-the-web in a single binary', Get Started button (link: /getting-started/installation), GitHub button (target: _blank to https://github.com/igorls/shellport), and a features grid with all 6 features in specified order (Zero Dependencies, E2E Encryption, TOTP 2FA, Canvas Terminal, Multi-Session, Tailscale). The worker verified the implementation using agent-browser and confirmed correct navigation and rendering. Minor case difference noted: hero name is 'ShellPort' but feature description said 'Shellport' - this is a cosmetic difference, not blocking."
+}

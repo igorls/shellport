@@ -1,0 +1,15 @@
+{
+  "featureId": "comparison-page",
+  "reviewedAt": "2026-03-20T21:35:00.000Z",
+  "commitId": "99fc18d",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Feature fully implemented. docs/comparison.md created with Core and Extras comparison tables matching README.md verbatim. Sidebar link confirmed in config.ts. Build succeeds. No issues found.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Feature comparison-page passes review. docs/comparison.md was created with accurate Core table (E2E Encryption, 2FA, Web UI, Multi-Session, CLI Client, Zero Deps, Single Binary) and Extras table (Collaboration, File Transfer, NAT Traversal, Language, Terminal, Active) comparing ShellPort vs ttyd, GoTTY, sshx, tmate, Upterm. All checkmarks match the README.md source exactly. A 'When to pick what' section was also added with recommendations. Build verified successfully."
+}
