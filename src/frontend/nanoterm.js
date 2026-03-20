@@ -381,7 +381,14 @@ class NanoTermV2 {
     }
 
     createEmptyLine() {
-        // BCE: use current background/foreground for erased cells
+        // Default empty line — uses default colors (for buffer creation, resize)
+        return Array.from({ length: this.cols }, () => ({
+            char: ' ', fg: 256, bg: 256, flags: 0
+        }));
+    }
+
+    createBCELine() {
+        // BCE-compliant empty line — uses current SGR colors (for erase/scroll ops)
         const fg = this.curFg;
         const bg = this.curBg;
         return Array.from({ length: this.cols }, () => ({
@@ -685,6 +692,7 @@ class NanoTermV2 {
                     this.scrollBottom = Math.max(this.scrollTop, Math.min(bottom, this.rows - 1));
                     this.cursorX = 0;
                     this.cursorY = 0;
+                    this.wrapPending = false;
                 }
                 break;
             case 's':
@@ -694,6 +702,7 @@ class NanoTermV2 {
             case 'u':
                 this.cursorX = this.savedCursorX;
                 this.cursorY = this.savedCursorY;
+                this.wrapPending = false;
                 break;
             case 'S': this.scrollUp(p[0] || 1); break;
             case 'T': this.scrollDown(p[0] || 1); break;
@@ -1010,7 +1019,7 @@ class NanoTermV2 {
                     this.scrollbackBuffer.shift();
                 }
             }
-            buffer.splice(scrollBottom, 0, this.createEmptyLine());
+            buffer.splice(scrollBottom, 0, this.createBCELine());
         }
     }
 
@@ -1020,7 +1029,7 @@ class NanoTermV2 {
         const scrollBottom = this.getScrollBottom();
         for (let i = 0; i < n; i++) {
             buffer.splice(scrollBottom, 1);
-            buffer.splice(scrollTop, 0, this.createEmptyLine());
+            buffer.splice(scrollTop, 0, this.createBCELine());
         }
     }
 
@@ -1029,15 +1038,15 @@ class NanoTermV2 {
         switch (mode) {
             case 0:
                 this.eraseLine(0);
-                for (let y = this.cursorY + 1; y < buffer.length; y++) buffer[y] = this.createEmptyLine();
+                for (let y = this.cursorY + 1; y < buffer.length; y++) buffer[y] = this.createBCELine();
                 break;
             case 1:
                 this.eraseLine(1);
-                for (let y = 0; y < this.cursorY; y++) buffer[y] = this.createEmptyLine();
+                for (let y = 0; y < this.cursorY; y++) buffer[y] = this.createBCELine();
                 break;
             case 2:
             case 3:
-                for (let y = 0; y < buffer.length; y++) buffer[y] = this.createEmptyLine();
+                for (let y = 0; y < buffer.length; y++) buffer[y] = this.createBCELine();
                 if (mode === 3 && !this.useAlternate) {
                     this.scrollbackBuffer = [];
                     this.scrollbackOffset = 0;
@@ -1058,7 +1067,7 @@ class NanoTermV2 {
                 for (let x = 0; x <= this.cursorX; x++) row[x] = { char: ' ', fg: this.curFg, bg: this.curBg, flags: 0 };
                 break;
             case 2:
-                buffer[this.cursorY] = this.createEmptyLine();
+                buffer[this.cursorY] = this.createBCELine();
                 break;
         }
     }
@@ -1093,7 +1102,7 @@ class NanoTermV2 {
         for (let i = 0; i < n; i++) {
             if (this.cursorY <= scrollBottom) {
                 buffer.splice(scrollBottom, 1);
-                buffer.splice(this.cursorY, 0, this.createEmptyLine());
+                buffer.splice(this.cursorY, 0, this.createBCELine());
             }
         }
     }
@@ -1104,7 +1113,7 @@ class NanoTermV2 {
         for (let i = 0; i < n; i++) {
             if (this.cursorY <= scrollBottom) {
                 buffer.splice(this.cursorY, 1);
-                buffer.splice(scrollBottom, 0, this.createEmptyLine());
+                buffer.splice(scrollBottom, 0, this.createBCELine());
             }
         }
     }
