@@ -9,14 +9,36 @@
  */
 
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 
 const PORT = 7777;
-const testDir = path.dirname(new URL(import.meta.url).pathname);
+const testDir = path.dirname(fileURLToPath(import.meta.url));
 const nanoTermPath = path.join(testDir, '..', 'src', 'frontend', 'nanoterm.js');
 
-// Track active PTY sessions per WebSocket
-const sessions = new Map<number, ReturnType<typeof Bun.spawn>>();
+const isWindows = process.platform === 'win32';
+
+// Track active sessions per WebSocket
+interface Session {
+    proc: ReturnType<typeof Bun.spawn>;
+    usePty: boolean;
+}
+const sessions = new Map<number, Session>();
 let sessionCounter = 0;
+
+/** Continuously read from a ReadableStream and forward to WebSocket */
+async function pipeStreamToWs(stream: ReadableStream<Uint8Array> | null, ws: any) {
+    if (!stream) return;
+    const reader = stream.getReader();
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            try {
+                if (ws.readyState === 1) ws.send(value);
+            } catch { break; }
+        }
+    } catch { /* stream closed */ }
+}
 
 const server = Bun.serve({
     port: PORT,
@@ -51,74 +73,114 @@ const server = Bun.serve({
 
     websocket: {
         open(ws) {
-            const shellCmd = process.env.SHELL || '/bin/bash';
-            console.log(`🐚 [Test] Client ${ws.data.id} connected — spawning PTY: ${shellCmd}`);
+            if (isWindows) {
+                // Windows: use piped stdin/stdout (no PTY support in Bun)
+                const shellCmd = process.env.COMSPEC || 'cmd.exe';
+                console.log(`🐚 [Test] Client ${ws.data.id} connected — spawning shell (piped): ${shellCmd}`);
 
-            const proc = Bun.spawn([shellCmd], {
-                cwd: process.env.HOME || '/tmp',
-                env: {
-                    ...process.env,
-                    TERM: 'xterm-256color',
-                    COLORTERM: 'truecolor',
-                    TERM_PROGRAM: 'WezTerm',
-                },
-                terminal: {
-                    cols: 120,
-                    rows: 40,
-                    data: (_terminal: unknown, data: Uint8Array) => {
-                        try {
-                            if (ws.readyState === 1) {
-                                ws.send(data);
-                            }
-                        } catch { /* client disconnected */ }
+                const proc = Bun.spawn([shellCmd], {
+                    cwd: process.env.USERPROFILE || process.env.HOME || 'C:\\',
+                    env: {
+                        ...process.env,
+                        TERM: 'xterm-256color',
                     },
-                },
-            });
+                    stdin: 'pipe',
+                    stdout: 'pipe',
+                    stderr: 'pipe',
+                });
 
-            sessions.set(ws.data.id, proc);
-            console.log(`🐚 [Test] PTY spawned PID=${proc.pid}`);
+                // Pipe stdout and stderr to WebSocket  
+                pipeStreamToWs(proc.stdout as ReadableStream<Uint8Array>, ws);
+                pipeStreamToWs(proc.stderr as ReadableStream<Uint8Array>, ws);
+
+                sessions.set(ws.data.id, { proc, usePty: false });
+                console.log(`🐚 [Test] Shell spawned PID=${proc.pid} (piped mode)`);
+            } else {
+                // Unix: use PTY terminal
+                const shellCmd = process.env.SHELL || '/bin/bash';
+                console.log(`🐚 [Test] Client ${ws.data.id} connected — spawning PTY: ${shellCmd}`);
+
+                const proc = Bun.spawn([shellCmd], {
+                    cwd: process.env.HOME || '/tmp',
+                    env: {
+                        ...process.env,
+                        TERM: 'xterm-256color',
+                        COLORTERM: 'truecolor',
+                        TERM_PROGRAM: 'WezTerm',
+                    },
+                    terminal: {
+                        cols: 120,
+                        rows: 40,
+                        data: (_terminal: unknown, data: Uint8Array) => {
+                            try {
+                                if (ws.readyState === 1) ws.send(data);
+                            } catch { /* client disconnected */ }
+                        },
+                    },
+                });
+
+                sessions.set(ws.data.id, { proc, usePty: true });
+                console.log(`🐚 [Test] PTY spawned PID=${proc.pid}`);
+            }
         },
 
         message(ws, message) {
-            const proc = sessions.get(ws.data.id);
-            if (!proc) return;
+            const session = sessions.get(ws.data.id);
+            if (!session) return;
+            const { proc, usePty } = session;
 
-            // Binary input → PTY terminal
-            if (typeof message !== 'string') {
+            if (usePty) {
+                // PTY mode (Unix)
+                if (typeof message !== 'string') {
+                    try {
+                        const terminal = (proc as any).terminal;
+                        if (terminal) terminal.write(new TextDecoder().decode(message as ArrayBuffer));
+                    } catch { /* process exited */ }
+                    return;
+                }
                 try {
-                    const terminal = (proc as any).terminal;
-                    if (terminal) {
-                        terminal.write(new TextDecoder().decode(message as ArrayBuffer));
+                    const msg = JSON.parse(message);
+                    if (msg.type === 'resize' && msg.cols && msg.rows) {
+                        const terminal = (proc as any).terminal;
+                        if (terminal) {
+                            terminal.resize(msg.cols, msg.rows);
+                            console.log(`🐚 [Test] Resized PTY to ${msg.cols}x${msg.rows}`);
+                        }
                     }
+                } catch {
+                    const terminal = (proc as any).terminal;
+                    if (terminal) terminal.write(message);
+                }
+            } else {
+                // Piped mode (Windows)
+                if (typeof message !== 'string') {
+                    try {
+                        proc.stdin?.write(new TextDecoder().decode(message as ArrayBuffer));
+                    } catch { /* process exited */ }
+                    return;
+                }
+                try {
+                    const msg = JSON.parse(message);
+                    if (msg.type === 'resize') {
+                        // Resize not supported in piped mode — ignore
+                        return;
+                    }
+                } catch { /* not JSON */ }
+                // Write text input to stdin
+                try {
+                    proc.stdin?.write(message);
                 } catch { /* process exited */ }
-                return;
-            }
-
-            // JSON control messages
-            try {
-                const msg = JSON.parse(message);
-                if (msg.type === 'resize' && msg.cols && msg.rows) {
-                    const terminal = (proc as any).terminal;
-                    if (terminal) {
-                        terminal.resize(msg.cols, msg.rows);
-                        console.log(`🐚 [Test] Resized PTY to ${msg.cols}x${msg.rows}`);
-                    }
-                }
-            } catch {
-                // Not JSON — treat as text input
-                const terminal = (proc as any).terminal;
-                if (terminal) {
-                    terminal.write(message);
-                }
             }
         },
 
         close(ws) {
-            const proc = sessions.get(ws.data.id);
-            if (proc) {
+            const session = sessions.get(ws.data.id);
+            if (session) {
+                const { proc, usePty } = session;
                 console.log(`🐚 [Test] Client ${ws.data.id} disconnected — killing PID=${proc.pid}`);
                 try {
-                    (proc as any).terminal?.close();
+                    if (usePty) (proc as any).terminal?.close();
+                    proc.stdin?.end();
                     proc.kill();
                 } catch { /* already dead */ }
                 sessions.delete(ws.data.id);
@@ -128,4 +190,5 @@ const server = Bun.serve({
 });
 
 console.log(`\n🧪 ShellPort Standalone Test Server`);
-console.log(`   Open http://localhost:${PORT} in your browser\n`);
+console.log(`   Open http://localhost:${PORT} in your browser`);
+console.log(`   Platform: ${process.platform} (${isWindows ? 'piped' : 'PTY'} mode)\n`);
