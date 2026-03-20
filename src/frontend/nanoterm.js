@@ -231,10 +231,14 @@ class NanoTermV2 {
         if (document.fonts && document.fonts.load) {
             const fontSpec = `${this.options.fontSize}px ${this.options.fontFamily}`;
             document.fonts.load(fontSpec).then(() => {
-                const oldWidth = this.charWidth;
                 this.measureChar();
-                if (this.charWidth !== oldWidth) {
-                    this.resize();
+                // Always resize after font load — even if charWidth didn't change,
+                // data rendered with fallback font metrics needs to be repainted.
+                // Bypass the debounce: this is a one-time correction, not a drag-resize.
+                this.resize();
+                if (this.onResize) {
+                    clearTimeout(this._resizeDebounceTimer);
+                    this.onResize(this.cols, this.rows);
                 }
             }).catch(() => { /* font not available, fallback is fine */ });
         }
