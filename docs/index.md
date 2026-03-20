@@ -8,7 +8,7 @@ hero:
   text: Encrypted terminal-over-the-web in a single binary
   tagline: Zero-dependency · E2E AES-256-GCM · TOTP 2FA · Built-in canvas terminal · Tailscale ready
   image:
-    src: /shellport/logo.png
+    src: /logo.png
     alt: ShellPort
   actions:
     - theme: brand
