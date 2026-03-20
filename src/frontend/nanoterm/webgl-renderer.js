@@ -201,44 +201,59 @@ void main() {
         uint uw = boxData.b;
         uint dw = boxData.a;
 
-        float cx = 0.5;
-        float cy = 0.5;
-        float thinW = 1.0 / u_charSize.x;    // 1px line width in UV
-        float thinH = 1.0 / u_charSize.y;
-        float thickW = max(2.0, u_charSize.x * 0.2) / u_charSize.x;
-        float thickH = max(2.0, u_charSize.y * 0.2) / u_charSize.y;
-        float gapW = max(2.0, u_charSize.x * 0.3) / u_charSize.x;
-        float gapH = max(2.0, u_charSize.y * 0.3) / u_charSize.y;
+        // Null entries (all weights 0) = curved/diagonal chars → fall through to atlas
+        if (lw != 0u || rw != 0u || uw != 0u || dw != 0u) {
+            float cx = 0.5;
+            float cy = 0.5;
+            float thinW = 1.0 / u_charSize.x;    // 1px line width in UV
+            float thinH = 1.0 / u_charSize.y;
+            float thickW = max(2.0, u_charSize.x * 0.2) / u_charSize.x;
+            float thickH = max(2.0, u_charSize.y * 0.2) / u_charSize.y;
+            float gapW = max(2.0, u_charSize.x * 0.3) / u_charSize.x;
+            float gapH = max(2.0, u_charSize.y * 0.3) / u_charSize.y;
 
-        bool hit = false;
+            bool hit = false;
 
-        // Horizontal segments
-        // Left segment
-        if (lw > 0u && localUV.x <= cx + thinW) {
-            if (lw == 1u && abs(localUV.y - cy) < thinH * 0.5) hit = true;
-            if (lw == 2u && abs(localUV.y - cy) < thickH * 0.5) hit = true;
-            if (lw == 3u && (abs(localUV.y - cy - gapH) < thinH * 0.5 || abs(localUV.y - cy + gapH) < thinH * 0.5)) hit = true;
-        }
-        // Right segment
-        if (rw > 0u && localUV.x >= cx) {
-            if (rw == 1u && abs(localUV.y - cy) < thinH * 0.5) hit = true;
-            if (rw == 2u && abs(localUV.y - cy) < thickH * 0.5) hit = true;
-            if (rw == 3u && (abs(localUV.y - cy - gapH) < thinH * 0.5 || abs(localUV.y - cy + gapH) < thinH * 0.5)) hit = true;
-        }
-        // Up segment
-        if (uw > 0u && localUV.y <= cy + thinH) {
-            if (uw == 1u && abs(localUV.x - cx) < thinW * 0.5) hit = true;
-            if (uw == 2u && abs(localUV.x - cx) < thickW * 0.5) hit = true;
-            if (uw == 3u && (abs(localUV.x - cx - gapW) < thinW * 0.5 || abs(localUV.x - cx + gapW) < thinW * 0.5)) hit = true;
-        }
-        // Down segment
-        if (dw > 0u && localUV.y >= cy) {
-            if (dw == 1u && abs(localUV.x - cx) < thinW * 0.5) hit = true;
-            if (dw == 2u && abs(localUV.x - cx) < thickW * 0.5) hit = true;
-            if (dw == 3u && (abs(localUV.x - cx - gapW) < thinW * 0.5 || abs(localUV.x - cx + gapW) < thinW * 0.5)) hit = true;
-        }
+            // Horizontal segments — extend past center to ensure overlap
+            // Left segment
+            if (lw > 0u && localUV.x <= cx + thinW * 0.5) {
+                if (lw == 1u && abs(localUV.y - cy) < thinH * 0.5 + 0.001) hit = true;
+                if (lw == 2u && abs(localUV.y - cy) < thickH * 0.5) hit = true;
+                if (lw == 3u && (abs(localUV.y - cy - gapH) < thinH * 0.5 || abs(localUV.y - cy + gapH) < thinH * 0.5)) hit = true;
+            }
+            // Right segment
+            if (rw > 0u && localUV.x >= cx - thinW * 0.5) {
+                if (rw == 1u && abs(localUV.y - cy) < thinH * 0.5 + 0.001) hit = true;
+                if (rw == 2u && abs(localUV.y - cy) < thickH * 0.5) hit = true;
+                if (rw == 3u && (abs(localUV.y - cy - gapH) < thinH * 0.5 || abs(localUV.y - cy + gapH) < thinH * 0.5)) hit = true;
+            }
+            // Up segment
+            if (uw > 0u && localUV.y <= cy + thinH * 0.5) {
+                if (uw == 1u && abs(localUV.x - cx) < thinW * 0.5 + 0.001) hit = true;
+                if (uw == 2u && abs(localUV.x - cx) < thickW * 0.5) hit = true;
+                if (uw == 3u && (abs(localUV.x - cx - gapW) < thinW * 0.5 || abs(localUV.x - cx + gapW) < thinW * 0.5)) hit = true;
+            }
+            // Down segment
+            if (dw > 0u && localUV.y >= cy - thinH * 0.5) {
+                if (dw == 1u && abs(localUV.x - cx) < thinW * 0.5 + 0.001) hit = true;
+                if (dw == 2u && abs(localUV.x - cx) < thickW * 0.5) hit = true;
+                if (dw == 3u && (abs(localUV.x - cx - gapW) < thinW * 0.5 || abs(localUV.x - cx + gapW) < thinW * 0.5)) hit = true;
+            }
 
-        if (hit) color = fgColor;
+            if (hit) color = fgColor;
+        }
+        // If all weights are 0, this is a null entry (╭╮╯╰, ╱╲╳)
+        // → fall through to atlas text rendering below
+        else if (codepoint > 32u && atlasIdx > 0u) {
+            uint atlasX = (atlasIdx - 1u) % uint(u_atlasGridSize);
+            uint atlasY = (atlasIdx - 1u) / uint(u_atlasGridSize);
+            vec2 atlasUV = vec2(
+                (float(atlasX) * u_atlasCellSize.x + localUV.x * u_atlasCellSize.x) / u_atlasTexSize.x,
+                (float(atlasY) * u_atlasCellSize.y + localUV.y * u_atlasCellSize.y) / u_atlasTexSize.y
+            );
+            vec4 glyph = texture(u_atlasTex, atlasUV);
+            color = mix(color, fgColor, glyph.a);
+        }
     }
     // ── Procedural braille (U+2800–U+28FF) ──
     else if (codepoint >= 0x2800u && codepoint <= 0x28FFu) {
@@ -615,8 +630,14 @@ export class WebGLRenderer {
      * Returns the 1-based atlas index, or 0 if the glyph can't be rendered.
      */
     _getAtlasIndex(cp, flags) {
-        // Skip special characters (rendered procedurally)
-        if (cp >= 0x2500 && cp <= 0x259F) return 0;
+        // Skip special characters (rendered procedurally in shader)
+        // But allow null entries in BOX_DRAWING_SEGMENTS (rounded corners, diagonals) through
+        if (cp >= 0x2500 && cp <= 0x257F) {
+            const seg = BOX_DRAWING_SEGMENTS[cp - 0x2500];
+            if (seg !== null) return 0; // Has segment data → procedural
+            // null → fall through to atlas (font-rendered curves/diagonals)
+        }
+        if (cp >= 0x2580 && cp <= 0x259F) return 0;
         if (cp >= 0x2800 && cp <= 0x28FF) return 0;
         if (cp === SPACE_CP || cp === 0) return 0;
 
@@ -862,8 +883,12 @@ export class WebGLRenderer {
             const flags = word0 & CELL_FLAGS_MASK;
 
             if (cp <= 32) continue;
-            // Skip procedural chars
-            if (cp >= 0x2500 && cp <= 0x259F) continue;
+            // Skip procedural chars — but allow null box entries through
+            if (cp >= 0x2500 && cp <= 0x257F) {
+                const seg = BOX_DRAWING_SEGMENTS[cp - 0x2500];
+                if (seg !== null) continue; // procedural → skip atlas
+                // null → needs atlas
+            } else if (cp >= 0x2580 && cp <= 0x259F) continue;
             if (cp >= 0x2800 && cp <= 0x28FF) continue;
 
             const atlasIdx = this._getAtlasIndex(cp, flags);
