@@ -249,38 +249,44 @@ void main() {
             bool hit = false;
 
             if (codepoint >= 0x256Du && codepoint <= 0x2570u) {
-                // Rounded corners — quarter circle arcs in pixel space
-                // Work in pixel coordinates for correct aspect ratio
+                // Rounded corners — elliptical arc in pixel space
+                // Elliptical because terminal cells are non-square (e.g. 8×17px)
                 vec2 px = localUV * u_charSize;  // pixel position within cell
-                float halfW = u_charSize.x * 0.5;
-                float halfH = u_charSize.y * 0.5;
+                float cx = u_charSize.x * 0.5;   // semi-axis X (half cell width)
+                float cy = u_charSize.y * 0.5;   // semi-axis Y (half cell height)
                 vec2 center;
                 bool inQuadrant = false;
 
                 if (codepoint == 0x256Du) {
-                    // ╭ top-left corner: arc center at bottom-right
-                    center = u_charSize;
-                    inQuadrant = (px.x <= halfW && px.y <= halfH);
+                    // ╭ top-left of box: connects Right and Down edges
+                    // Arc drawn in BOTTOM-RIGHT quadrant of this cell
+                    center = vec2(u_charSize.x, u_charSize.y);
+                    inQuadrant = (px.x >= cx && px.y >= cy);
                 } else if (codepoint == 0x256Eu) {
-                    // ╮ top-right corner: arc center at bottom-left
+                    // ╮ top-right of box: connects Left and Down edges
+                    // Arc drawn in BOTTOM-LEFT quadrant
                     center = vec2(0.0, u_charSize.y);
-                    inQuadrant = (px.x >= halfW && px.y <= halfH);
+                    inQuadrant = (px.x <= cx && px.y >= cy);
                 } else if (codepoint == 0x256Fu) {
-                    // ╯ bottom-right corner: arc center at top-left
+                    // ╯ bottom-right of box: connects Left and Up edges
+                    // Arc drawn in TOP-LEFT quadrant
                     center = vec2(0.0, 0.0);
-                    inQuadrant = (px.x >= halfW && px.y >= halfH);
+                    inQuadrant = (px.x <= cx && px.y <= cy);
                 } else {
-                    // ╰ bottom-left corner: arc center at top-right
+                    // ╰ bottom-left of box: connects Right and Up edges
+                    // Arc drawn in TOP-RIGHT quadrant
                     center = vec2(u_charSize.x, 0.0);
-                    inQuadrant = (px.x <= halfW && px.y >= halfH);
+                    inQuadrant = (px.x >= cx && px.y <= cy);
                 }
 
                 if (inQuadrant) {
-                    float dist = length(px - center);
-                    // Radius reaches to cell edge midpoints
-                    float radius = min(halfW, halfH);
-                    // Use same thickness as straight segments (1px)
-                    if (abs(dist - radius) < 0.8) hit = true;
+                    vec2 d = px - center;
+                    // Ellipse equation: f = (dx/cx)^2 + (dy/cy)^2 - 1
+                    float f = (d.x*d.x)/(cx*cx) + (d.y*d.y)/(cy*cy) - 1.0;
+                    vec2 grad = vec2(2.0*d.x/(cx*cx), 2.0*d.y/(cy*cy));
+                    // Distance to ellipse edge ≈ |f| / |∇f|
+                    float dist = abs(f) / length(grad);
+                    if (dist < 0.5) hit = true;
                 }
             }
             else if (codepoint == 0x2571u) {
@@ -655,7 +661,11 @@ export class WebGLRenderer {
         this._atlasNextSlot = 1;
 
         if (this.charWidth > 0 && this.charHeight > 0) {
-            this._atlasSlotsPerRow = Math.floor(ATLAS_SIZE / this.charWidth);
+            const dpr = window.devicePixelRatio || 1;
+            this._atlasDpr = dpr;
+            this._atlasCharW = Math.ceil(this.charWidth * dpr);
+            this._atlasCharH = Math.ceil(this.charHeight * dpr);
+            this._atlasSlotsPerRow = Math.floor(ATLAS_SIZE / this._atlasCharW);
         }
 
         // Create/recreate offscreen atlas canvas
@@ -701,7 +711,7 @@ export class WebGLRenderer {
         }
 
         // Check atlas capacity
-        const maxSlots = this._atlasSlotsPerRow * Math.floor(ATLAS_SIZE / this.charHeight);
+        const maxSlots = this._atlasSlotsPerRow * Math.floor(ATLAS_SIZE / (this._atlasCharH || this.charHeight));
         if (this._atlasNextSlot >= maxSlots) {
             // Atlas full — rebuild (clear and re-upload visible glyphs)
             this._rebuildAtlas();
@@ -711,17 +721,20 @@ export class WebGLRenderer {
         const slot = this._atlasNextSlot++;
         this._atlasMap.set(key, slot);
 
-        // Rasterize glyph to offscreen canvas
-        const slotX = ((slot - 1) % this._atlasSlotsPerRow) * this.charWidth;
-        const slotY = Math.floor((slot - 1) / this._atlasSlotsPerRow) * this.charHeight;
+        // Rasterize glyph to offscreen canvas at physical pixel size (HiDPI)
+        const dpr = this._atlasDpr || 1;
+        const cw = this._atlasCharW || this.charWidth;
+        const ch = this._atlasCharH || this.charHeight;
+        const slotX = ((slot - 1) % this._atlasSlotsPerRow) * cw;
+        const slotY = Math.floor((slot - 1) / this._atlasSlotsPerRow) * ch;
 
         const ctx = this._atlasCtx;
-        ctx.clearRect(slotX, slotY, this.charWidth, this.charHeight);
+        ctx.clearRect(slotX, slotY, cw, ch);
 
         const fontParts = [];
         if (styleFlags & ATTR.BOLD) fontParts.push('bold');
         if (styleFlags & ATTR.ITALIC) fontParts.push('italic');
-        fontParts.push(`${this.options.fontSize}px`);
+        fontParts.push(`${this.options.fontSize * dpr}px`);
         fontParts.push(this.options.fontFamily);
         ctx.font = fontParts.join(' ');
         ctx.textBaseline = 'top';
@@ -733,9 +746,9 @@ export class WebGLRenderer {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
         // Extract just this glyph's pixels
-        const pixels = ctx.getImageData(slotX, slotY, this.charWidth, this.charHeight);
+        const pixels = ctx.getImageData(slotX, slotY, cw, ch);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, slotX, slotY,
-            this.charWidth, this.charHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels.data);
+            cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, pixels.data);
 
         return slot;
     }
@@ -779,7 +792,11 @@ export class WebGLRenderer {
         // Assemble visible rows into a contiguous Uint32Array for GPU upload
         const { gridData, visibleCols, visibleRows } = this._buildVisibleGrid(term);
 
-        // ── Upload grid data texture ──
+        // ── Process atlas for all visible glyphs (BEFORE texture upload) ──
+        // This fills gridData[i*4+3] with atlas indices
+        this._updateAtlasForGrid(gridData, visibleCols, visibleRows);
+
+        // ── Upload grid data texture (now includes atlas indices) ──
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.gridTexture);
 
@@ -797,9 +814,6 @@ export class WebGLRenderer {
                 gl.RGBA_INTEGER, gl.UNSIGNED_INT, gridData);
         }
 
-        // ── Process atlas for all visible glyphs ──
-        this._updateAtlasForGrid(gridData, visibleCols, visibleRows);
-
         // ── Set uniforms ──
         gl.uniform2i(this.uniforms.u_gridSize, visibleCols, visibleRows);
         gl.uniform2f(this.uniforms.u_charSize, this.charWidth, this.charHeight);
@@ -809,7 +823,7 @@ export class WebGLRenderer {
         // Atlas info
         gl.uniform1f(this.uniforms.u_atlasGridSize, this._atlasSlotsPerRow);
         gl.uniform2f(this.uniforms.u_atlasTexSize, ATLAS_SIZE, ATLAS_SIZE);
-        gl.uniform2f(this.uniforms.u_atlasCellSize, this.charWidth, this.charHeight);
+        gl.uniform2f(this.uniforms.u_atlasCellSize, this._atlasCharW || this.charWidth, this._atlasCharH || this.charHeight);
 
         // Default colors
         const dfg = this.themeFgRGBA;
@@ -862,7 +876,12 @@ export class WebGLRenderer {
         const scrollbackVisible = term.scrollbackOffset > 0 && !term.useAlternate;
 
         // Output: cols × rows RGBA32UI (4 uints per cell, 1 texel per cell)
-        const gridData = new Uint32Array(cols * rows * 4);
+        // Cache the array to avoid per-frame garbage (Fix #5)
+        const size = cols * rows * 4;
+        if (!this._gridData || this._gridData.length !== size) {
+            this._gridData = new Uint32Array(size);
+        }
+        const gridData = this._gridData;
 
         let destRow = 0;
 
@@ -937,14 +956,7 @@ export class WebGLRenderer {
             // Write atlas index back into gridData word3
             gridData[i * 4 + 3] = atlasIdx;
         }
-
-        // Re-upload grid with atlas indices filled in
-        const gl = this.gl;
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, this.gridTexture);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0,
-            cols, rows,
-            gl.RGBA_INTEGER, gl.UNSIGNED_INT, gridData);
+        // Grid data already includes atlas indices; single upload happens in render()
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────

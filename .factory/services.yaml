@@ -7,4 +7,9 @@ commands:
   docs:build: bunx vitepress build docs
   docs:preview: bunx vitepress preview docs
 
-services: {}
+services:
+  docs:
+    description: "VitePress documentation dev server"
+    start: "cd /home/igorls/dev/GitHub/shellport && bunx vitepress dev docs --port 5173"
+    healthcheck: "curl -sf http://localhost:5173/shellport/ > /dev/null"
+    stop: "pkill -f 'vitepress dev'"

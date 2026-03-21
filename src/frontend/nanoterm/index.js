@@ -1227,10 +1227,7 @@ class NanoTermV2 {
             } else {
                 this.isSelecting = true;
                 this.selectionStart = this.screenToCell(e.clientX, e.clientY);
-                this.selection = {
-                    startRow: this.selectionStart.y, endRow: this.selectionStart.y,
-                    startCol: this.selectionStart.x, endCol: this.selectionStart.x
-                };
+                this.selection = null; // Don't create 0-width selection (traps Ctrl+C)
             }
         }
         this.canvas.focus();
@@ -1243,9 +1240,9 @@ class NanoTermV2 {
             const cell = this.screenToCell(e.clientX, e.clientY);
             if (this.selectionStart) {
                 if (cell.y < this.selectionStart.y || (cell.y === this.selectionStart.y && cell.x < this.selectionStart.x)) {
-                    this.selection = { startRow: cell.y, endRow: this.selectionStart.y, startCol: cell.x, endCol: this.selectionStart.x };
+                    this.selection = { startRow: cell.y, endRow: this.selectionStart.y, startCol: cell.x, endCol: this.selectionStart.x + 1 };
                 } else {
-                    this.selection = { startRow: this.selectionStart.y, endRow: cell.y, startCol: this.selectionStart.x, endCol: cell.x };
+                    this.selection = { startRow: this.selectionStart.y, endRow: cell.y, startCol: this.selectionStart.x, endCol: cell.x + 1 };
                 }
                 this.triggerRender();
             }
@@ -1289,9 +1286,15 @@ class NanoTermV2 {
             }
         } else {
             e.preventDefault();
-            const delta = Math.round(e.deltaY / this.charHeight);
-            this.scrollbackOffset = Math.max(0, Math.min(this.scrollbackBuffer.length, this.scrollbackOffset + delta));
-            this.triggerRender();
+            // Accumulate fractional deltas for smooth trackpad scrolling
+            this._scrollAccum = (this._scrollAccum || 0) + e.deltaY;
+            const rows = Math.trunc(this._scrollAccum / this.charHeight);
+            if (rows !== 0) {
+                this._scrollAccum -= rows * this.charHeight;
+                // Positive deltaY = scroll down = move AWAY from history (subtract)
+                this.scrollbackOffset = Math.max(0, Math.min(this.scrollbackBuffer.length, this.scrollbackOffset - rows));
+                this.triggerRender();
+            }
         }
     }
 
