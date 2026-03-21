@@ -742,10 +742,10 @@ class NanoTermV2 {
                         this.savedCursorX = this.cursorX;
                         this.savedCursorY = this.cursorY;
                         break;
-                    case 1000: this.mouseTracking = 1000; console.log('[MOUSE] tracking=1000'); break;
-                    case 1002: this.mouseTracking = 1002; console.log('[MOUSE] tracking=1002'); break;
-                    case 1003: this.mouseTracking = 1003; console.log('[MOUSE] tracking=1003'); break;
-                    case 1006: this.mouseProtocol = 'sgr'; console.log('[MOUSE] protocol=sgr'); break;
+                    case 1000: this.mouseTracking = 1000; break;
+                    case 1002: this.mouseTracking = 1002; break;
+                    case 1003: this.mouseTracking = 1003; break;
+                    case 1006: this.mouseProtocol = 'sgr'; break;
                     case 2004: this.bracketedPaste = true; break;
                 }
             }
@@ -1230,7 +1230,6 @@ class NanoTermV2 {
     }
 
     onMouseDown(e) {
-        console.log('[MOUSE] mouseDown btn=' + e.button + ' tracking=' + this.mouseTracking + ' shift=' + e.shiftKey);
         if (this.mouseTracking && !e.shiftKey) {
             e.preventDefault();
             this.sendMouseReport(e, 'down');
@@ -1286,14 +1285,10 @@ class NanoTermV2 {
 
         if (this.mouseProtocol === 'sgr') {
             const final = type === 'up' ? 'm' : 'M';
-            const seq = `\x1b[<${button + mods};${x};${y}${final}`;
-            console.log(`[MOUSE] SGR report: type=${type} btn=${button} mods=${mods} x=${x} y=${y} seq=${JSON.stringify(seq)}`);
-            this.send(seq);
+            this.send(`\x1b[<${button + mods};${x};${y}${final}`);
         } else {
             button += 32; mods += 32;
-            const seq = `\x1b[M${String.fromCharCode(button)}${String.fromCharCode(x + 32)}${String.fromCharCode(y + 32)}`;
-            console.log(`[MOUSE] Normal report: type=${type} btn=${button-32} x=${x} y=${y}`);
-            this.send(seq);
+            this.send(`\x1b[M${String.fromCharCode(button)}${String.fromCharCode(x + 32)}${String.fromCharCode(y + 32)}`);
         }
     }
 
