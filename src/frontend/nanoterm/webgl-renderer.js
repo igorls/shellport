@@ -234,11 +234,16 @@ void main() {
             float extL_in = lw == 3u ? gap_y - hw1 : (lw == 2u ? -hw2_y : (lw == 1u ? -hw1 : 0.0));
             float extR_in = rw == 3u ? gap_y - hw1 : (rw == 2u ? -hw2_y : (rw == 1u ? -hw1 : 0.0));
 
+            // Ensure minimum hw1 overlap where segments meet at cx/cy
+            // Without this, boxAlpha returns 0.5 at box edges, creating visible dips
+            float hOverlap = max(max(extU_out, extD_out), hw1);
+            float vOverlap = max(max(extL_out, extR_out), hw1);
+
             float aOut = 0.0;
-            if (lw > 0u) aOut = max(aOut, boxAlpha(px, -1.0, cx + max(extU_out, extD_out), cy - (lw==3u ? gap_y+hw1 : (lw==2u ? hw2_y : hw1)), cy + (lw==3u ? gap_y+hw1 : (lw==2u ? hw2_y : hw1))));
-            if (rw > 0u) aOut = max(aOut, boxAlpha(px, cx - max(extU_out, extD_out), u_charSize.x + 1.0, cy - (rw==3u ? gap_y+hw1 : (rw==2u ? hw2_y : hw1)), cy + (rw==3u ? gap_y+hw1 : (rw==2u ? hw2_y : hw1))));
-            if (uw > 0u) aOut = max(aOut, boxAlpha(px, cx - (uw==3u ? gap_x+hw1 : (uw==2u ? hw2_x : hw1)), cx + (uw==3u ? gap_x+hw1 : (uw==2u ? hw2_x : hw1)), -1.0, cy + max(extL_out, extR_out)));
-            if (dw > 0u) aOut = max(aOut, boxAlpha(px, cx - (dw==3u ? gap_x+hw1 : (dw==2u ? hw2_x : hw1)), cx + (dw==3u ? gap_x+hw1 : (dw==2u ? hw2_x : hw1)), cy - max(extL_out, extR_out), u_charSize.y + 1.0));
+            if (lw > 0u) aOut = max(aOut, boxAlpha(px, -1.0, cx + hOverlap, cy - (lw==3u ? gap_y+hw1 : (lw==2u ? hw2_y : hw1)), cy + (lw==3u ? gap_y+hw1 : (lw==2u ? hw2_y : hw1))));
+            if (rw > 0u) aOut = max(aOut, boxAlpha(px, cx - hOverlap, u_charSize.x + 1.0, cy - (rw==3u ? gap_y+hw1 : (rw==2u ? hw2_y : hw1)), cy + (rw==3u ? gap_y+hw1 : (rw==2u ? hw2_y : hw1))));
+            if (uw > 0u) aOut = max(aOut, boxAlpha(px, cx - (uw==3u ? gap_x+hw1 : (uw==2u ? hw2_x : hw1)), cx + (uw==3u ? gap_x+hw1 : (uw==2u ? hw2_x : hw1)), -1.0, cy + vOverlap));
+            if (dw > 0u) aOut = max(aOut, boxAlpha(px, cx - (dw==3u ? gap_x+hw1 : (dw==2u ? hw2_x : hw1)), cx + (dw==3u ? gap_x+hw1 : (dw==2u ? hw2_x : hw1)), cy - vOverlap, u_charSize.y + 1.0));
 
             float aIn = 0.0;
             if (lw == 3u) aIn = max(aIn, boxAlpha(px, -1.0, cx + max(extU_in, extD_in), cy - (gap_y-hw1), cy + (gap_y-hw1)));
