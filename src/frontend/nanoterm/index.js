@@ -112,6 +112,7 @@ class NanoTermV2 {
         // Mouse tracking
         this.mouseTracking = 0;
         this.mouseProtocol = 'normal';
+        this.applicationCursorKeys = false;
 
         // Bracketed paste
         this.bracketedPaste = false;
@@ -129,6 +130,7 @@ class NanoTermV2 {
 
         // Rendering
         this.renderPending = false;
+        this._isDestroyed = false;
 
         // Resize debounce
         this._resizeDebounceTimer = null;
@@ -152,6 +154,7 @@ class NanoTermV2 {
         if (document.fonts && document.fonts.load) {
             const fontSpec = `${this.options.fontSize}px ${this.options.fontFamily}`;
             document.fonts.load(fontSpec).then(() => {
+                if (this._isDestroyed) return; // Prevent updating dead terminals
                 this.measureChar();
                 // Always resize after font load — even if charWidth didn't change,
                 // data rendered with fallback font metrics needs to be repainted.
@@ -715,7 +718,7 @@ class NanoTermV2 {
         for (const p of params) {
             if (priv) {
                 switch (p) {
-                    case 1: break;
+                    case 1: this.applicationCursorKeys = true; break;
                     case 3:
                         this.cols = 132;
                         this.clearScreen();
@@ -741,6 +744,7 @@ class NanoTermV2 {
                         break;
                     case 1000: this.mouseTracking = 1000; break;
                     case 1002: this.mouseTracking = 1002; break;
+                    case 1003: this.mouseTracking = 1003; break;
                     case 1006: this.mouseProtocol = 'sgr'; break;
                     case 2004: this.bracketedPaste = true; break;
                 }
@@ -752,7 +756,7 @@ class NanoTermV2 {
         for (const p of params) {
             if (priv) {
                 switch (p) {
-                    case 1: break;
+                    case 1: this.applicationCursorKeys = false; break;
                     case 3:
                         this.cols = 80;
                         this.clearScreen();
@@ -761,6 +765,7 @@ class NanoTermV2 {
                     case 9:
                     case 1000:
                     case 1002:
+                    case 1003:
                         this.mouseTracking = 0;
                         break;
                     case 25:
@@ -1075,9 +1080,11 @@ class NanoTermV2 {
     // -------------------------------------------------------------------------
 
     triggerRender() {
-        if (!this.renderPending) {
+        if (!this.renderPending && !this._isDestroyed) {
             this.renderPending = true;
-            requestAnimationFrame(() => this.render());
+            requestAnimationFrame(() => {
+                if (!this._isDestroyed) this.render();
+            });
         }
     }
 
@@ -1128,8 +1135,10 @@ class NanoTermV2 {
         this.canvas.addEventListener('wheel', e => this.onWheel(e));
         this.canvas.addEventListener('contextmenu', e => this.onContextMenu(e));
 
-        const resizeObserver = new ResizeObserver(() => this.resize());
-        resizeObserver.observe(this.container);
+        this._resizeObserver = new ResizeObserver(() => {
+            if (!this._isDestroyed) this.resize();
+        });
+        this._resizeObserver.observe(this.container);
 
         this.canvas.addEventListener('paste', e => this.onPaste(e));
     }
@@ -1160,10 +1169,10 @@ class NanoTermV2 {
                 case 'Backspace': seq = e.ctrlKey ? '\x08' : '\x7f'; break;
                 case 'Tab': seq = e.shiftKey ? '\x1b[Z' : '\t'; break;
                 case 'Escape': seq = '\x1b'; break;
-                case 'ArrowUp': seq = modifier ? `\x1b[1;${modifier + 1}A` : '\x1b[A'; break;
-                case 'ArrowDown': seq = modifier ? `\x1b[1;${modifier + 1}B` : '\x1b[B'; break;
-                case 'ArrowRight': seq = modifier ? `\x1b[1;${modifier + 1}C` : '\x1b[C'; break;
-                case 'ArrowLeft': seq = modifier ? `\x1b[1;${modifier + 1}D` : '\x1b[D'; break;
+                case 'ArrowUp': seq = modifier ? `\x1b[1;${modifier + 1}A` : (this.applicationCursorKeys ? '\x1bOA' : '\x1b[A'); break;
+                case 'ArrowDown': seq = modifier ? `\x1b[1;${modifier + 1}B` : (this.applicationCursorKeys ? '\x1bOB' : '\x1b[B'); break;
+                case 'ArrowRight': seq = modifier ? `\x1b[1;${modifier + 1}C` : (this.applicationCursorKeys ? '\x1bOC' : '\x1b[C'); break;
+                case 'ArrowLeft': seq = modifier ? `\x1b[1;${modifier + 1}D` : (this.applicationCursorKeys ? '\x1bOD' : '\x1b[D'); break;
                 case 'Home': seq = modifier ? `\x1b[1;${modifier + 1}H` : '\x1b[H'; break;
                 case 'End': seq = modifier ? `\x1b[1;${modifier + 1}F` : '\x1b[F'; break;
                 case 'Insert': seq = '\x1b[2~'; break;
@@ -1221,31 +1230,29 @@ class NanoTermV2 {
     }
 
     onMouseDown(e) {
-        if (e.button === 0) {
-            if (this.mouseTracking && !e.shiftKey) {
-                this.sendMouseReport(e, 'down');
-            } else {
-                this.isSelecting = true;
-                this.selectionStart = this.screenToCell(e.clientX, e.clientY);
-                this.selection = {
-                    startRow: this.selectionStart.y, endRow: this.selectionStart.y,
-                    startCol: this.selectionStart.x, endCol: this.selectionStart.x
-                };
-            }
+        if (this.mouseTracking && !e.shiftKey) {
+            e.preventDefault();
+            this.sendMouseReport(e, 'down');
+        } else if (e.button === 0) {
+            this.isSelecting = true;
+            this.selectionStart = this.screenToCell(e.clientX, e.clientY);
+            this.selection = null; // Don't create 0-width selection (traps Ctrl+C)
         }
         this.canvas.focus();
     }
 
     onMouseMove(e) {
-        if (this.mouseTracking && this.mouseTracking === 1002 && !e.shiftKey) {
-            if (this.isSelecting || e.buttons === 1) this.sendMouseReport(e, 'drag');
+        if (this.mouseTracking && (this.mouseTracking === 1002 || this.mouseTracking === 1003) && !e.shiftKey) {
+            if (this.mouseTracking === 1003 || e.buttons > 0) {
+                this.sendMouseReport(e, e.buttons === 0 ? 'move' : 'drag');
+            }
         } else if (this.isSelecting) {
             const cell = this.screenToCell(e.clientX, e.clientY);
             if (this.selectionStart) {
                 if (cell.y < this.selectionStart.y || (cell.y === this.selectionStart.y && cell.x < this.selectionStart.x)) {
-                    this.selection = { startRow: cell.y, endRow: this.selectionStart.y, startCol: cell.x, endCol: this.selectionStart.x };
+                    this.selection = { startRow: cell.y, endRow: this.selectionStart.y, startCol: cell.x, endCol: this.selectionStart.x + 1 };
                 } else {
-                    this.selection = { startRow: this.selectionStart.y, endRow: cell.y, startCol: this.selectionStart.x, endCol: cell.x };
+                    this.selection = { startRow: this.selectionStart.y, endRow: cell.y, startCol: this.selectionStart.x, endCol: cell.x + 1 };
                 }
                 this.triggerRender();
             }
@@ -1253,21 +1260,26 @@ class NanoTermV2 {
     }
 
     onMouseUp(e) {
-        if (e.button === 0) {
-            if (this.mouseTracking && !e.shiftKey) this.sendMouseReport(e, 'up');
+        if (this.mouseTracking && !e.shiftKey) {
+            e.preventDefault();
+            this.sendMouseReport(e, 'up');
+        } else if (e.button === 0) {
             this.isSelecting = false;
         }
     }
 
     sendMouseReport(e, type) {
         const rect = this.canvas.getBoundingClientRect();
-        const x = Math.floor((e.clientX - rect.left) / this.charWidth) + 1;
-        const y = Math.floor((e.clientY - rect.top) / this.charHeight) + 1;
+        const pad = this.options.padding || 6;
+        // Account for terminal padding — chars start after pad offset
+        const x = Math.max(1, Math.floor((e.clientX - rect.left - pad) / this.charWidth) + 1);
+        const y = Math.max(1, Math.floor((e.clientY - rect.top - pad) / this.charHeight) + 1);
 
-        let button = e.button;
+        let button = e.button; // 0=left, 1=middle, 2=right
         if (type === 'up') button = 3;
-        else if (type === 'drag' && e.buttons === 1) button = 32 + 1;
-        else if (type === 'drag') return;
+        else if (type === 'move') button = 35; // No button pressed — mode 1003 passive movement
+        else if (type === 'drag') button = 32 + (e.buttons & 1 ? 0 : (e.buttons & 2 ? 2 : (e.buttons & 4 ? 1 : 0)));
+        else if (type === 'scroll') button = e.button; // Already set by caller
 
         let mods = (e.shiftKey ? 4 : 0) + (e.altKey ? 8 : 0) + (e.ctrlKey ? 16 : 0);
 
@@ -1289,9 +1301,15 @@ class NanoTermV2 {
             }
         } else {
             e.preventDefault();
-            const delta = Math.round(e.deltaY / this.charHeight);
-            this.scrollbackOffset = Math.max(0, Math.min(this.scrollbackBuffer.length, this.scrollbackOffset + delta));
-            this.triggerRender();
+            // Accumulate fractional deltas for smooth trackpad scrolling
+            this._scrollAccum = (this._scrollAccum || 0) + e.deltaY;
+            const rows = Math.trunc(this._scrollAccum / this.charHeight);
+            if (rows !== 0) {
+                this._scrollAccum -= rows * this.charHeight;
+                // Positive deltaY = scroll down = move AWAY from history (subtract)
+                this.scrollbackOffset = Math.max(0, Math.min(this.scrollbackBuffer.length, this.scrollbackOffset - rows));
+                this.triggerRender();
+            }
         }
     }
 
@@ -1360,9 +1378,50 @@ class NanoTermV2 {
         this.triggerRender();
     }
 
+    /**
+     * Live theme switching — updates colors without losing terminal state.
+     * @param {Object} theme - Partial theme object (background, foreground, cursor, selection, palette)
+     */
+    setTheme(theme) {
+        // Merge with existing colors
+        if (theme.background) this.colors.background = theme.background;
+        if (theme.foreground) this.colors.foreground = theme.foreground;
+        if (theme.cursor) this.colors.cursor = theme.cursor;
+        if (theme.selection) this.colors.selection = theme.selection;
+        if (theme.palette) this.colors.palette = theme.palette;
+
+        // Propagate to renderer
+        if (this.renderer && this.renderer.updateTheme) {
+            this.renderer.updateTheme(this.colors);
+        }
+
+        this.triggerRender();
+    }
+
+    /**
+     * Live font size change — re-measures and resizes without losing terminal state.
+     * @param {number} size - New font size in pixels
+     */
+    setFontSize(size) {
+        if (size === this.options.fontSize) return;
+        this.options.fontSize = size;
+        this.measureChar();
+        this.resize();
+    }
+
     destroy() {
+        this._isDestroyed = true;
         this.stopCursorBlink();
-        if (this.canvas.parentNode) this.canvas.parentNode.removeChild(this.canvas);
+        if (this._resizeObserver) {
+            this._resizeObserver.disconnect();
+            this._resizeObserver = null;
+        }
+        if (this.renderer && typeof this.renderer.destroy === 'function') {
+            this.renderer.destroy();
+            this.renderer = null;
+        } else if (this.canvas && this.canvas.parentNode) {
+            this.canvas.parentNode.removeChild(this.canvas);
+        }
     }
 }
 

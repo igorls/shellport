@@ -1,93 +1,84 @@
-# Rendering Fidelity & Bug Hunt Review — NanoTermV2 WebGL Renderer (Round 2)
+# Pixel-Perfect Arc Rendering & Font Resize Stability — Round 3
 
 ## Project Context
 
-NanoTermV2 is a zero-dependency, GPU-accelerated terminal emulator in vanilla JavaScript. It renders to `<canvas>` using WebGL2 with automatic fallback to Canvas2D. The project is split into ES modules bundled via Bun at build time.
+NanoTermV2 is a zero-dependency WebGL2 terminal emulator rendering to `<canvas>`. The WebGL renderer uses a full-screen quad fragment shader with RGBA32UI data textures and a dynamic glyph atlas. Box-drawing characters (U+2500–U+257F) are rendered procedurally in the shader.
 
-**Architecture:**
-- `index.js` — Full VT100/xterm emulator core (SGR, CSI, OSC, DCS, scrollback, selection, clipboard, cursor)
-- `webgl-renderer.js` — WebGL2 primary renderer: full-screen quad, GLSL fragment shader, RGBA32UI data textures, dynamic glyph atlas, procedural box drawing / braille / block chars
-- `canvas-renderer.js` — Canvas2D fallback renderer
-- `constants.js` — Shared constants including the `BOX_DRAWING_SEGMENTS` table
-
-**Critical context:** The WebGL renderer was **never actually running** until this session. A null crash in `_uploadBoxTexture()` (null entries in `BOX_DRAWING_SEGMENTS` for rounded corners) silently fell back to Canvas2D. This means the WebGL shader code has had zero real-world testing until now.
-
-## Review Scope
-
-Round 2 focused stability + correctness review. The renderer now initializes successfully but has visible rendering artifacts:
-
-1. **Rounded corner arcs (╭╮╯╰)** do not connect seamlessly with adjacent straight box-drawing segments at cell edge midpoints. The current pixel-space arc SDF uses `radius = min(halfW, halfH)` but terminal cells are non-square (typically ~8×17 pixels), so the arc endpoint doesn't land at (0.5, 0) or (0, 0.5) of the adjacent cell boundary.
-2. **Double-line box drawing** corners appear to render incorrectly
-3. Clipboard and input handling was broken (fixed but needs validation)
+In Round 2, we replaced the circular arc SDF with an elliptical arc using algebraic distance (`|f|/|∇f|`). The quadrant assignments were also corrected. However, the rendering still has visible problems.
 
 ## Attached Context Packs
 
-| File | Contents | Token Estimate |
-|------|----------|----------------|
-| `context_full.md` | Complete NanoTermV2 source: `index.js` (emulator core), `webgl-renderer.js` (WebGL2 renderer), `canvas-renderer.js` (Canvas2D fallback), `constants.js` (box drawing table) | ~25K |
+| File | Contents | Tokens |
+|------|----------|--------|
+| `context_full.md` | Full NanoTermV2 source: `index.js`, `webgl-renderer.js`, `canvas-renderer.js`, `constants.js` | ~25K |
+
+## Problem 1: Arc Aliasing & Corner Gaps
+
+Screenshots show the rounded corner arcs at default font size (14px) and enlarged (zoomed in browser):
+- The arc line is **not anti-aliased** — it uses a hard `if (dist < 0.5) hit = true` threshold producing visible staircase artifacts
+- The arc endpoints **don't precisely meet** the straight segment endpoints at cell edge midpoints, leaving subtle gaps visible especially at larger font sizes
+- The straight box-drawing segments (U+2500 horizontal, U+2502 vertical) use `thinH * 0.5 + 0.001` as their half-width, but the arc uses a different thickness model (`dist < 0.5`), so there's a **thickness mismatch** at the junction
+
+The current shader code for rounded corners (find `0x256D` in `webgl-renderer.js`):
+```glsl
+if (inQuadrant) {
+    vec2 d = px - center;
+    float f = (d.x*d.x)/(cx*cx) + (d.y*d.y)/(cy*cy) - 1.0;
+    vec2 grad = vec2(2.0*d.x/(cx*cx), 2.0*d.y/(cy*cy));
+    float dist = abs(f) / length(grad);
+    if (dist < 0.5) hit = true;
+}
+```
+
+### What needs to be fixed:
+1. **Anti-aliasing**: Use `smoothstep` instead of a hard threshold to produce sub-pixel blending at arc edges
+2. **Thickness matching**: The arc stroke width must exactly match the straight segment thickness (which uses `thinH` / `thinW` values computed as `1.0 / u_charSize.y` and `1.0 / u_charSize.x`)
+3. **Junction precision**: The ellipse must pass exactly through the cell edge midpoints `(cx, 0)`, `(cx, charH)`, `(0, cy)`, `(charW, cy)` — verify the math guarantees this
+
+## Problem 2: Font Size Change Breaks Rendering
+
+The test page now has font size controls (−/+ buttons). When changing font size:
+- The terminal is destroyed and recreated with a new `NanoTermV2` instance
+- The glyph atlas, grid texture, and WebGL resources are recreated
+- However, **rendering breaks** after font size change — unclear what specifically, but the user reported issues
+
+### What needs to be fixed:
+1. Review the `destroy()` method in WebGLRenderer — does it properly clean up ALL GL resources?
+2. Review how `measureChar()` and `_resetAtlas()` behave when the renderer is recreated
+3. Check if the cached `_gridData` array (added in Round 2 Fix #5) could be stale across recreations
+4. Check if `_atlasDpr`, `_atlasCharW`, `_atlasCharH` are properly initialized on recreation
+
+## Problem 3: Straight Segment Thickness Model
+
+The current straight-line box drawing uses `thinH` and `thinW` (1 pixel in UV space) with an additional `+ 0.001` fudge factor. Review whether:
+1. The `+ 0.001` epsilon is appropriate or causes visual artifacts
+2. The thickness model for weight=1 (thin), weight=2 (thick), weight=3 (double) is correct
+3. Segments extend exactly from N/S/E/W cell edges to center in UV space
 
 ## Focus Areas
 
-### 1. Rounded Corner Arc SDF Geometry (HIGHEST PRIORITY)
+### 1. Sub-Pixel Anti-Aliased Elliptical Arc (HIGHEST PRIORITY)
+- Replace `if (dist < threshold) hit = true` with a `smoothstep` blend
+- The `color` output should interpolate between `bgColor` and `fgColor` based on sub-pixel coverage
+- Ensure the stroke width exactly matches the straight segment's `thinH * 0.5 + epsilon`
+- Verify the ellipse algebra: with center at corner (charW, charH) and semi-axes (cx, cy), the ellipse equation `(x-charW)²/cx² + (y-charH)²/cy² = 1` should yield points (cx, charH) and (charW, cy) — verify these are the exact cell edge midpoints
 
-The current shader code for ╭╮╯╰ uses:
-```glsl
-vec2 px = localUV * u_charSize;  // pixel position
-float halfW = u_charSize.x * 0.5;
-float halfH = u_charSize.y * 0.5;
-// center at opposite corner, e.g. for ╭: center = u_charSize (bottom-right)
-float radius = min(halfW, halfH);
-if (abs(dist - radius) < 0.8) hit = true;
-```
+### 2. Font Size Change Stability
+- Trace the full lifecycle: `NanoTermV2.destroy()` → `WebGLRenderer.destroy()` → `new NanoTermV2()` → `new WebGLRenderer()`
+- Identify any leaked state, stale caches, or missing reinitialization
+- Check if the GL context is properly lost/recreated or reused
 
-**The problem:** With non-square cells (e.g. 8px × 17px), `min(halfW, halfH) = 4`, so the arc is a circle of radius 4px centered at (8, 17). This circle:
-- Reaches X=4 at Y≈17 ✓ (connects to the horizontal line at cell right-edge midpoint... wait, it's a circle, so at Y=17 it's at X=8±4, meaning X=4 and X=12... but X=4 is the midpoint at `localUV.x=0.5` ✓)
-- At X=0: it reaches Y=17-sqrt(16-64)... imaginary → the arc never reaches the vertical line at Y midpoint!
-
-**The arc cannot connect both edges with a circular radius when cells are non-square.** This is the fundamental geometry bug. Review and suggest the correct approach. Consider:
-- Elliptical arc instead of circular
-- Remapping to UV space with aspect-correction
-- Using `halfW` for the horizontal radius and `halfH` for the vertical radius
-
-### 2. Box Drawing Segment Rendering
-- Is the `BOX_DRAWING_SEGMENTS` table complete and correct for all codepoints 0x2500–0x257F?
-- Do null entries correctly map to procedural rendering in the shader?
-- Are the hit-test thresholds for thin (1) vs thick (2) weight correct?
-- Do segments connect exactly at cell edge midpoints with no sub-pixel gaps?
-
-### 3. Texture Upload & Data Packing
-- Is the `_buildGridData()` packing correct? Check bit-field extraction in shader vs JavaScript encoding
-- Are atlas UV coordinates computed correctly? Watch for off-by-one in `texelFetch`
-- Is `_uploadBoxTexture()` encoding the segment weights correctly in RGBA32UI channels?
-- Any precision issues with float/int conversions?
-
-### 4. Performance
-- `_buildGridData()` iterates entire grid every frame — could dirty-region tracking help?
-- Atlas texture grows but never shrinks — memory leak in long sessions?
-- `requestAnimationFrame` loop runs even when nothing changes
-- Any unnecessary texture re-uploads?
-
-### 5. Renderer Interface Parity
-- What features does CanvasRenderer support that WebGLRenderer is missing?
-- Is `measureChar()` consistent between renderers?
-- Are cursor, selection overlay, underline/strikethrough equivalent?
-- Does DPI/devicePixelRatio handling match?
-
-### 6. Clipboard & Input
-- Ctrl+C: copies when selection exists, sends ^C otherwise — is the logic correct for all edge cases?
-- Ctrl+Shift+C: always copies — does it work with empty selection?
-- Right-click context menu: null guard added — is there a better pattern?
-- Does `getSelection()` correctly decode all codepoints from the packed `Uint32Array`?
+### 3. Thickness Consistency
+- Map the straight segment thickness model to match the arc thickness precisely
+- Both should use the same `lineWidth` constant expressed in the same coordinate space (pixels or UV)
 
 ## Output Format
 
 For each finding:
-
 - **Severity**: CRITICAL / HIGH / MEDIUM / LOW
 - **File**: filename and line numbers
-- **Category**: which focus area (1-6)
+- **Category**: which focus area (1-3)
 - **Description**: what the issue is
-- **Impact**: what the user sees or what breaks
-- **Suggested Fix**: concrete code-level recommendation
+- **Suggested Fix**: concrete GLSL/JS code
 
-Group findings by severity. End with: total counts, top 3 issues, overall assessment of production-readiness.
+End with: top 3 issues, overall assessment.
