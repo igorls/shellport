@@ -121,7 +121,9 @@ void main() {
     }
 
     // Local UV within this cell [0, 1]
-    vec2 localUV = fract(termPos / u_charSize);
+    // Use explicit subtraction instead of fract() to avoid float precision
+    // at cell boundaries that cause micro-gap artifacts
+    vec2 localUV = (termPos - vec2(cell) * u_charSize) / u_charSize;
 
     // Fetch cell data from grid texture
     uvec4 cellData = texelFetch(u_gridTex, cell, 0);
@@ -352,11 +354,8 @@ void main() {
             (float(atlasY) * u_atlasCellSize.y + localUV.y * u_atlasCellSize.y) / u_atlasTexSize.y
         );
 
-        // Apply italic skew
-        if ((flags & FLAG_ITALIC) != 0u) {
-            float skew = (1.0 - localUV.y) * 0.2; // skew based on vertical position
-            atlasUV.x += skew * u_atlasCellSize.x / u_atlasTexSize.x;
-        }
+        // Note: italic glyphs are already rasterized italic in the atlas
+        // No shader skew needed — it caused double-application artifacts
 
         vec4 glyph = texture(u_atlasTex, atlasUV);
         // Alpha compositing: glyph alpha modulates fg color over bg
