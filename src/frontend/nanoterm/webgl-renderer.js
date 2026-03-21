@@ -961,6 +961,13 @@ export class WebGLRenderer {
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
+    updateTheme(colors) {
+        this.colors = colors;
+        this.themeFgRGBA = hexToRGBA(colors.foreground);
+        this.themeBgRGBA = hexToRGBA(colors.background);
+        // No atlas rebuild needed — glyphs are white, shader tints with fg/bg
+    }
+
     destroy() {
         const gl = this.gl;
         if (gl) {

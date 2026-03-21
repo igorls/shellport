@@ -1363,6 +1363,26 @@ class NanoTermV2 {
         this.triggerRender();
     }
 
+    /**
+     * Live theme switching — updates colors without losing terminal state.
+     * @param {Object} theme - Partial theme object (background, foreground, cursor, selection, palette)
+     */
+    setTheme(theme) {
+        // Merge with existing colors
+        if (theme.background) this.colors.background = theme.background;
+        if (theme.foreground) this.colors.foreground = theme.foreground;
+        if (theme.cursor) this.colors.cursor = theme.cursor;
+        if (theme.selection) this.colors.selection = theme.selection;
+        if (theme.palette) this.colors.palette = theme.palette;
+
+        // Propagate to renderer
+        if (this.renderer && this.renderer.updateTheme) {
+            this.renderer.updateTheme(this.colors);
+        }
+
+        this.triggerRender();
+    }
+
     destroy() {
         this.stopCursorBlink();
         if (this.canvas.parentNode) this.canvas.parentNode.removeChild(this.canvas);

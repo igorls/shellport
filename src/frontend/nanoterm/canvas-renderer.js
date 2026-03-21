@@ -518,6 +518,12 @@ export class CanvasRenderer {
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
+    updateTheme(colors) {
+        this.colors = colors;
+        this.themeFgRGBA = hexToRGBA(colors.foreground);
+        this.themeBgRGBA = hexToRGBA(colors.background);
+    }
+
     destroy() {
         if (this.canvas.parentNode) this.canvas.parentNode.removeChild(this.canvas);
     }
