@@ -1268,18 +1268,23 @@ class NanoTermV2 {
         }
     }
 
-    sendMouseReport(e, type) {
+    sendMouseReport(e, type, overrideButton) {
         const rect = this.canvas.getBoundingClientRect();
-        const pad = this.options.padding || 6;
+        const pad = this.options.padding ?? 6;
         // Account for terminal padding — chars start after pad offset
-        const x = Math.max(1, Math.floor((e.clientX - rect.left - pad) / this.charWidth) + 1);
-        const y = Math.max(1, Math.floor((e.clientY - rect.top - pad) / this.charHeight) + 1);
+        // Clamp to valid grid bounds [1, cols/rows]
+        const x = Math.max(1, Math.min(this.cols, Math.floor((e.clientX - rect.left - pad) / this.charWidth) + 1));
+        const y = Math.max(1, Math.min(this.rows, Math.floor((e.clientY - rect.top - pad) / this.charHeight) + 1));
 
-        let button = e.button; // 0=left, 1=middle, 2=right
-        if (type === 'up') button = 3;
-        else if (type === 'move') button = 35; // No button pressed — mode 1003 passive movement
-        else if (type === 'drag') button = 32 + (e.buttons & 1 ? 0 : (e.buttons & 2 ? 2 : (e.buttons & 4 ? 1 : 0)));
-        else if (type === 'scroll') button = e.button; // Already set by caller
+        let button = overrideButton !== undefined ? overrideButton : e.button; // 0=left, 1=middle, 2=right
+        if (type === 'up') {
+            // SGR protocol preserves original button ID — only legacy uses button=3
+            button = this.mouseProtocol === 'sgr' ? button : 3;
+        } else if (type === 'move') {
+            button = 35; // No button pressed — mode 1003 passive movement
+        } else if (type === 'drag') {
+            button = 32 + (e.buttons & 1 ? 0 : (e.buttons & 2 ? 2 : (e.buttons & 4 ? 1 : 0)));
+        }
 
         let mods = (e.shiftKey ? 4 : 0) + (e.altKey ? 8 : 0) + (e.ctrlKey ? 16 : 0);
 
@@ -1287,19 +1292,20 @@ class NanoTermV2 {
             const final = type === 'up' ? 'm' : 'M';
             this.send(`\x1b[<${button + mods};${x};${y}${final}`);
         } else {
-            button += 32; mods += 32;
-            this.send(`\x1b[M${String.fromCharCode(button)}${String.fromCharCode(x + 32)}${String.fromCharCode(y + 32)}`);
+            // Legacy X10: send raw bytes to avoid UTF-8 expansion for coords > 127
+            const cb = button + mods + 32;
+            this.send(new Uint8Array([0x1B, 0x5B, 0x4D, cb, Math.min(255, x + 32), Math.min(255, y + 32)]));
         }
     }
 
     onWheel(e) {
-        if (this.useAlternate) {
-            if (this.mouseTracking) {
-                const button = e.deltaY > 0 ? 1 : 0;
-                e.button = button + 64;
-                this.sendMouseReport(e, 'scroll');
-            }
-        } else {
+        // Fix #5: Check mouseTracking first, independent of buffer mode
+        if (this.mouseTracking) {
+            e.preventDefault();
+            // Fix #2: Pass scroll button as overrideButton — e.button is read-only on WheelEvent
+            const scrollButton = e.deltaY > 0 ? 65 : 64; // 65=scroll-down, 64=scroll-up
+            this.sendMouseReport(e, 'scroll', scrollButton);
+        } else if (!this.useAlternate) {
             e.preventDefault();
             // Accumulate fractional deltas for smooth trackpad scrolling
             this._scrollAccum = (this._scrollAccum || 0) + e.deltaY;

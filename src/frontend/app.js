@@ -152,8 +152,9 @@ function createSession() {
     // Create terminal
     const term = new NanoTermV2(canvasContainer, data => {
         if (!handshakeComplete) return;
-        const encoder = new TextEncoder();
-        sendMsg(0, encoder.encode(data));
+        // Support both string data and raw Uint8Array (e.g., legacy X10 mouse reports)
+        const payload = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+        sendMsg(0, payload);
     });
 
     let pendingResize = null;
