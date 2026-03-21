@@ -112,6 +112,7 @@ class NanoTermV2 {
         // Mouse tracking
         this.mouseTracking = 0;
         this.mouseProtocol = 'normal';
+        this.applicationCursorKeys = false;
 
         // Bracketed paste
         this.bracketedPaste = false;
@@ -717,7 +718,7 @@ class NanoTermV2 {
         for (const p of params) {
             if (priv) {
                 switch (p) {
-                    case 1: break;
+                    case 1: this.applicationCursorKeys = true; break;
                     case 3:
                         this.cols = 132;
                         this.clearScreen();
@@ -743,6 +744,7 @@ class NanoTermV2 {
                         break;
                     case 1000: this.mouseTracking = 1000; break;
                     case 1002: this.mouseTracking = 1002; break;
+                    case 1003: this.mouseTracking = 1003; break;
                     case 1006: this.mouseProtocol = 'sgr'; break;
                     case 2004: this.bracketedPaste = true; break;
                 }
@@ -754,7 +756,7 @@ class NanoTermV2 {
         for (const p of params) {
             if (priv) {
                 switch (p) {
-                    case 1: break;
+                    case 1: this.applicationCursorKeys = false; break;
                     case 3:
                         this.cols = 80;
                         this.clearScreen();
@@ -763,6 +765,7 @@ class NanoTermV2 {
                     case 9:
                     case 1000:
                     case 1002:
+                    case 1003:
                         this.mouseTracking = 0;
                         break;
                     case 25:
@@ -1166,10 +1169,10 @@ class NanoTermV2 {
                 case 'Backspace': seq = e.ctrlKey ? '\x08' : '\x7f'; break;
                 case 'Tab': seq = e.shiftKey ? '\x1b[Z' : '\t'; break;
                 case 'Escape': seq = '\x1b'; break;
-                case 'ArrowUp': seq = modifier ? `\x1b[1;${modifier + 1}A` : '\x1b[A'; break;
-                case 'ArrowDown': seq = modifier ? `\x1b[1;${modifier + 1}B` : '\x1b[B'; break;
-                case 'ArrowRight': seq = modifier ? `\x1b[1;${modifier + 1}C` : '\x1b[C'; break;
-                case 'ArrowLeft': seq = modifier ? `\x1b[1;${modifier + 1}D` : '\x1b[D'; break;
+                case 'ArrowUp': seq = modifier ? `\x1b[1;${modifier + 1}A` : (this.applicationCursorKeys ? '\x1bOA' : '\x1b[A'); break;
+                case 'ArrowDown': seq = modifier ? `\x1b[1;${modifier + 1}B` : (this.applicationCursorKeys ? '\x1bOB' : '\x1b[B'); break;
+                case 'ArrowRight': seq = modifier ? `\x1b[1;${modifier + 1}C` : (this.applicationCursorKeys ? '\x1bOC' : '\x1b[C'); break;
+                case 'ArrowLeft': seq = modifier ? `\x1b[1;${modifier + 1}D` : (this.applicationCursorKeys ? '\x1bOD' : '\x1b[D'); break;
                 case 'Home': seq = modifier ? `\x1b[1;${modifier + 1}H` : '\x1b[H'; break;
                 case 'End': seq = modifier ? `\x1b[1;${modifier + 1}F` : '\x1b[F'; break;
                 case 'Insert': seq = '\x1b[2~'; break;
@@ -1240,8 +1243,8 @@ class NanoTermV2 {
     }
 
     onMouseMove(e) {
-        if (this.mouseTracking && this.mouseTracking === 1002 && !e.shiftKey) {
-            if (this.isSelecting || e.buttons === 1) this.sendMouseReport(e, 'drag');
+        if (this.mouseTracking && (this.mouseTracking === 1002 || this.mouseTracking === 1003) && !e.shiftKey) {
+            if (this.mouseTracking === 1003 || this.isSelecting || e.buttons === 1) this.sendMouseReport(e, this.mouseTracking === 1003 && e.buttons === 0 ? 'move' : 'drag');
         } else if (this.isSelecting) {
             const cell = this.screenToCell(e.clientX, e.clientY);
             if (this.selectionStart) {
@@ -1269,8 +1272,9 @@ class NanoTermV2 {
 
         let button = e.button;
         if (type === 'up') button = 3;
-        else if (type === 'drag' && e.buttons === 1) button = 32 + 1;
-        else if (type === 'drag') return;
+        else if (type === 'move') button = 35; // No button pressed — mode 1003 passive movement
+        else if (type === 'drag') button = 32 + (e.buttons & 1 ? 0 : (e.buttons & 2 ? 1 : (e.buttons & 4 ? 2 : 0)));
+        else if (type === 'scroll') button = e.button; // Already set by caller
 
         let mods = (e.shiftKey ? 4 : 0) + (e.altKey ? 8 : 0) + (e.ctrlKey ? 16 : 0);
 
