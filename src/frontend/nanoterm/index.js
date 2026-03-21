@@ -1389,6 +1389,17 @@ class NanoTermV2 {
         this.triggerRender();
     }
 
+    /**
+     * Live font size change — re-measures and resizes without losing terminal state.
+     * @param {number} size - New font size in pixels
+     */
+    setFontSize(size) {
+        if (size === this.options.fontSize) return;
+        this.options.fontSize = size;
+        this.measureChar();
+        this.resize();
+    }
+
     destroy() {
         this._isDestroyed = true;
         this.stopCursorBlink();

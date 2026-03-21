@@ -244,9 +244,11 @@
         function changeFontSize(delta) {
             const newSize = Math.max(8, Math.min(32, currentFontSize + delta));
             if (newSize === currentFontSize) return;
-            createTerminal(newSize);
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(new TextEncoder().encode('\x0c'));
+            currentFontSize = newSize;
+            fontSizeDisplay.textContent = newSize;
+            if (term) {
+                term.setFontSize(newSize);
+                updateCellInfo();
             }
         }
 
