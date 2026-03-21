@@ -93,6 +93,14 @@ vec4 resolveColor(uint color, vec4 defaultColor) {
     return color == 0u ? defaultColor : unpackRGBA(color);
 }
 
+// Perfect anti-aliased square-capped bounding box SDF
+float boxAlpha(vec2 p, float minX, float maxX, float minY, float maxY) {
+    float dx = max(minX - p.x, p.x - maxX);
+    float dy = max(minY - p.y, p.y - maxY);
+    float d = length(max(vec2(dx, dy), 0.0)) + min(max(dx, dy), 0.0);
+    return smoothstep(0.5, -0.5, d);
+}
+
 // ── Main Fragment ───────────────────────────────────────────────────────────
 
 void main() {
@@ -203,113 +211,104 @@ void main() {
 
         // Null entries (all weights 0) = curved/diagonal chars → fall through to atlas
         if (lw != 0u || rw != 0u || uw != 0u || dw != 0u) {
-            float cx = 0.5;
-            float cy = 0.5;
-            float thinW = 1.0 / u_charSize.x;    // 1px line width in UV
-            float thinH = 1.0 / u_charSize.y;
-            float thickW = max(2.0, u_charSize.x * 0.2) / u_charSize.x;
-            float thickH = max(2.0, u_charSize.y * 0.2) / u_charSize.y;
-            float gapW = max(2.0, u_charSize.x * 0.3) / u_charSize.x;
-            float gapH = max(2.0, u_charSize.y * 0.3) / u_charSize.y;
+            vec2 px = localUV * u_charSize;
+            // Snap to exact pixel centers for perfectly crisp 1-pixel lines
+            float cx = floor(u_charSize.x * 0.5) + 0.5;
+            float cy = floor(u_charSize.y * 0.5) + 0.5;
 
-            bool hit = false;
+            float hw1 = 0.5;
+            float hw2_x = max(1.0, floor(u_charSize.x * 0.1) + 0.5);
+            float hw2_y = max(1.0, floor(u_charSize.y * 0.1) + 0.5);
+            float gap_x = max(1.0, floor(u_charSize.x * 0.15));
+            float gap_y = max(1.0, floor(u_charSize.y * 0.15));
 
-            // Horizontal segments — extend past center to ensure overlap
-            // Left segment
-            if (lw > 0u && localUV.x <= cx + thinW * 0.5) {
-                if (lw == 1u && abs(localUV.y - cy) < thinH * 0.5 + 0.001) hit = true;
-                if (lw == 2u && abs(localUV.y - cy) < thickH * 0.5) hit = true;
-                if (lw == 3u && (abs(localUV.y - cy - gapH) < thinH * 0.5 || abs(localUV.y - cy + gapH) < thinH * 0.5)) hit = true;
-            }
-            // Right segment
-            if (rw > 0u && localUV.x >= cx - thinW * 0.5) {
-                if (rw == 1u && abs(localUV.y - cy) < thinH * 0.5 + 0.001) hit = true;
-                if (rw == 2u && abs(localUV.y - cy) < thickH * 0.5) hit = true;
-                if (rw == 3u && (abs(localUV.y - cy - gapH) < thinH * 0.5 || abs(localUV.y - cy + gapH) < thinH * 0.5)) hit = true;
-            }
-            // Up segment
-            if (uw > 0u && localUV.y <= cy + thinH * 0.5) {
-                if (uw == 1u && abs(localUV.x - cx) < thinW * 0.5 + 0.001) hit = true;
-                if (uw == 2u && abs(localUV.x - cx) < thickW * 0.5) hit = true;
-                if (uw == 3u && (abs(localUV.x - cx - gapW) < thinW * 0.5 || abs(localUV.x - cx + gapW) < thinW * 0.5)) hit = true;
-            }
-            // Down segment
-            if (dw > 0u && localUV.y >= cy - thinH * 0.5) {
-                if (dw == 1u && abs(localUV.x - cx) < thinW * 0.5 + 0.001) hit = true;
-                if (dw == 2u && abs(localUV.x - cx) < thickW * 0.5) hit = true;
-                if (dw == 3u && (abs(localUV.x - cx - gapW) < thinW * 0.5 || abs(localUV.x - cx + gapW) < thinW * 0.5)) hit = true;
-            }
+            float extU_out = uw == 3u ? gap_x + hw1 : (uw == 2u ? hw2_x : (uw == 1u ? hw1 : 0.0));
+            float extD_out = dw == 3u ? gap_x + hw1 : (dw == 2u ? hw2_x : (dw == 1u ? hw1 : 0.0));
+            float extL_out = lw == 3u ? gap_y + hw1 : (lw == 2u ? hw2_y : (lw == 1u ? hw1 : 0.0));
+            float extR_out = rw == 3u ? gap_y + hw1 : (rw == 2u ? hw2_y : (rw == 1u ? hw1 : 0.0));
 
-            if (hit) color = fgColor;
+            float extU_in = uw == 3u ? gap_x - hw1 : (uw == 2u ? -hw2_x : (uw == 1u ? -hw1 : 0.0));
+            float extD_in = dw == 3u ? gap_x - hw1 : (dw == 2u ? -hw2_x : (dw == 1u ? -hw1 : 0.0));
+            float extL_in = lw == 3u ? gap_y - hw1 : (lw == 2u ? -hw2_y : (lw == 1u ? -hw1 : 0.0));
+            float extR_in = rw == 3u ? gap_y - hw1 : (rw == 2u ? -hw2_y : (rw == 1u ? -hw1 : 0.0));
+
+            float aOut = 0.0;
+            if (lw > 0u) aOut = max(aOut, boxAlpha(px, -1.0, cx + max(extU_out, extD_out), cy - (lw==3u ? gap_y+hw1 : (lw==2u ? hw2_y : hw1)), cy + (lw==3u ? gap_y+hw1 : (lw==2u ? hw2_y : hw1))));
+            if (rw > 0u) aOut = max(aOut, boxAlpha(px, cx - max(extU_out, extD_out), u_charSize.x + 1.0, cy - (rw==3u ? gap_y+hw1 : (rw==2u ? hw2_y : hw1)), cy + (rw==3u ? gap_y+hw1 : (rw==2u ? hw2_y : hw1))));
+            if (uw > 0u) aOut = max(aOut, boxAlpha(px, cx - (uw==3u ? gap_x+hw1 : (uw==2u ? hw2_x : hw1)), cx + (uw==3u ? gap_x+hw1 : (uw==2u ? hw2_x : hw1)), -1.0, cy + max(extL_out, extR_out)));
+            if (dw > 0u) aOut = max(aOut, boxAlpha(px, cx - (dw==3u ? gap_x+hw1 : (dw==2u ? hw2_x : hw1)), cx + (dw==3u ? gap_x+hw1 : (dw==2u ? hw2_x : hw1)), cy - max(extL_out, extR_out), u_charSize.y + 1.0));
+
+            float aIn = 0.0;
+            if (lw == 3u) aIn = max(aIn, boxAlpha(px, -1.0, cx + max(extU_in, extD_in), cy - (gap_y-hw1), cy + (gap_y-hw1)));
+            if (rw == 3u) aIn = max(aIn, boxAlpha(px, cx - max(extU_in, extD_in), u_charSize.x + 1.0, cy - (gap_y-hw1), cy + (gap_y-hw1)));
+            if (uw == 3u) aIn = max(aIn, boxAlpha(px, cx - (gap_x-hw1), cx + (gap_x-hw1), -1.0, cy + max(extL_in, extR_in)));
+            if (dw == 3u) aIn = max(aIn, boxAlpha(px, cx - (gap_x-hw1), cx + (gap_x-hw1), cy - max(extL_in, extR_in), u_charSize.y + 1.0));
+
+            // CSG subtraction: carves perfect double-line joints
+            float alpha = max(0.0, aOut - aIn);
+            if (alpha > 0.0) color = mix(color, fgColor, alpha);
         }
         // Null entries: procedural rounded corners + diagonals
         else {
-            float thinW = 1.0 / u_charSize.x;
-            float thinH = 1.0 / u_charSize.y;
-            bool hit = false;
+            float alpha = 0.0;
+            float hw1 = 0.5;
 
             if (codepoint >= 0x256Du && codepoint <= 0x2570u) {
-                // Rounded corners — elliptical arc in pixel space
-                // Elliptical because terminal cells are non-square (e.g. 8×17px)
-                vec2 px = localUV * u_charSize;  // pixel position within cell
-                float cx = u_charSize.x * 0.5;   // semi-axis X (half cell width)
-                float cy = u_charSize.y * 0.5;   // semi-axis Y (half cell height)
-                vec2 center;
+                vec2 px = localUV * u_charSize;
+                float cx = floor(u_charSize.x * 0.5) + 0.5;
+                float cy = floor(u_charSize.y * 0.5) + 0.5;
+                vec2 center; float a, b;
                 bool inQuadrant = false;
 
-                if (codepoint == 0x256Du) {
-                    // ╭ top-left of box: connects Right and Down edges
-                    // Arc drawn in BOTTOM-RIGHT quadrant of this cell
+                // Allow stroke to bleed across boundary to prevent slicing
+                float bleed = 1.5;
+
+                if (codepoint == 0x256Du) { // ╭
                     center = vec2(u_charSize.x, u_charSize.y);
-                    inQuadrant = (px.x >= cx && px.y >= cy);
-                } else if (codepoint == 0x256Eu) {
-                    // ╮ top-right of box: connects Left and Down edges
-                    // Arc drawn in BOTTOM-LEFT quadrant
+                    a = u_charSize.x - cx; b = u_charSize.y - cy;
+                    inQuadrant = (px.x >= cx - bleed && px.y >= cy - bleed);
+                } else if (codepoint == 0x256Eu) { // ╮
                     center = vec2(0.0, u_charSize.y);
-                    inQuadrant = (px.x <= cx && px.y >= cy);
-                } else if (codepoint == 0x256Fu) {
-                    // ╯ bottom-right of box: connects Left and Up edges
-                    // Arc drawn in TOP-LEFT quadrant
+                    a = cx; b = u_charSize.y - cy;
+                    inQuadrant = (px.x <= cx + bleed && px.y >= cy - bleed);
+                } else if (codepoint == 0x256Fu) { // ╯
                     center = vec2(0.0, 0.0);
-                    inQuadrant = (px.x <= cx && px.y <= cy);
-                } else {
-                    // ╰ bottom-left of box: connects Right and Up edges
-                    // Arc drawn in TOP-RIGHT quadrant
+                    a = cx; b = cy;
+                    inQuadrant = (px.x <= cx + bleed && px.y <= cy + bleed);
+                } else { // ╰
                     center = vec2(u_charSize.x, 0.0);
-                    inQuadrant = (px.x >= cx && px.y <= cy);
+                    a = u_charSize.x - cx; b = cy;
+                    inQuadrant = (px.x >= cx - bleed && px.y <= cy + bleed);
                 }
 
                 if (inQuadrant) {
                     vec2 d = px - center;
-                    // Ellipse equation: f = (dx/cx)^2 + (dy/cy)^2 - 1
-                    float f = (d.x*d.x)/(cx*cx) + (d.y*d.y)/(cy*cy) - 1.0;
-                    vec2 grad = vec2(2.0*d.x/(cx*cx), 2.0*d.y/(cy*cy));
-                    // Distance to ellipse edge ≈ |f| / |∇f|
-                    float dist = abs(f) / length(grad);
-                    if (dist < 0.5) hit = true;
+                    if (length(d) > 0.0001) {
+                        vec2 p_scaled = d / vec2(a, b);
+                        float delta = length(p_scaled) - 1.0;
+                        vec2 dir = normalize(p_scaled);
+                        float T = length(dir * vec2(1.0/a, 1.0/b));
+                        float dist = abs(delta) / T;
+                        alpha = max(alpha, smoothstep(hw1 + 0.5, hw1 - 0.5, dist));
+                    }
                 }
             }
-            else if (codepoint == 0x2571u) {
-                // ╱ Forward diagonal
+            else if (codepoint >= 0x2571u && codepoint <= 0x2573u) {
                 vec2 px = localUV * u_charSize;
-                float d = abs(px.x / u_charSize.x + px.y / u_charSize.y - 1.0);
-                if (d < thinH * 0.7) hit = true;
-            }
-            else if (codepoint == 0x2572u) {
-                // ╲ Back diagonal
-                vec2 px = localUV * u_charSize;
-                float d = abs(px.x / u_charSize.x - px.y / u_charSize.y);
-                if (d < thinH * 0.7) hit = true;
-            }
-            else if (codepoint == 0x2573u) {
-                // ╳ Cross diagonal
-                vec2 px = localUV * u_charSize;
-                float d1 = abs(px.x / u_charSize.x + px.y / u_charSize.y - 1.0);
-                float d2 = abs(px.x / u_charSize.x - px.y / u_charSize.y);
-                if (d1 < thinH * 0.7 || d2 < thinH * 0.7) hit = true;
+                float A = 1.0 / u_charSize.x;
+                float B = 1.0 / u_charSize.y;
+                float len = sqrt(A*A + B*B);
+                if (codepoint == 0x2571u || codepoint == 0x2573u) {
+                    float d1 = abs(px.x * A + px.y * B - 1.0) / len;
+                    alpha = max(alpha, smoothstep(hw1 + 0.5, hw1 - 0.5, d1));
+                }
+                if (codepoint == 0x2572u || codepoint == 0x2573u) {
+                    float d2 = abs(px.x * A - px.y * B) / len;
+                    alpha = max(alpha, smoothstep(hw1 + 0.5, hw1 - 0.5, d2));
+                }
             }
 
-            if (hit) color = fgColor;
+            if (alpha > 0.0) color = mix(color, fgColor, alpha);
         }
     }
     // ── Procedural braille (U+2800–U+28FF) ──
@@ -942,21 +941,31 @@ export class WebGLRenderer {
 
     _updateAtlasForGrid(gridData, cols, rows) {
         const total = cols * rows;
-        for (let i = 0; i < total; i++) {
+        let rebuilds = 0;
+        let i = 0;
+
+        while (i < total) {
             const word0 = gridData[i * 4];
             const cp = word0 >>> CELL_CP_SHIFT;
             const flags = word0 & CELL_FLAGS_MASK;
 
-            if (cp <= 32) continue;
-            // Skip procedural chars
-            if (cp >= 0x2500 && cp <= 0x259F) continue;
-            if (cp >= 0x2800 && cp <= 0x28FF) continue;
+            if (cp <= 32 || (cp >= 0x2500 && cp <= 0x259F) || (cp >= 0x2800 && cp <= 0x28FF)) {
+                i++; continue;
+            }
 
+            const expectedSlot = this._atlasNextSlot;
             const atlasIdx = this._getAtlasIndex(cp, flags);
-            // Write atlas index back into gridData word3
+
+            // Atlas wiped mid-frame! Restart loop to update invalid indices
+            if (this._atlasNextSlot < expectedSlot) {
+                rebuilds++;
+                if (rebuilds > 1) { gridData[i * 4 + 3] = atlasIdx; i++; continue; } // Failsafe
+                i = 0; continue;
+            }
+
             gridData[i * 4 + 3] = atlasIdx;
+            i++;
         }
-        // Grid data already includes atlas indices; single upload happens in render()
     }
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
@@ -976,7 +985,13 @@ export class WebGLRenderer {
             if (this.boxTexture) gl.deleteTexture(this.boxTexture);
             if (this.program) gl.deleteProgram(this.program);
             if (this._vao) gl.deleteVertexArray(this._vao);
+
+            // Forcibly return the WebGL context slot to the browser
+            const ext = gl.getExtension('WEBGL_lose_context');
+            if (ext) ext.loseContext();
+            this.gl = null;
         }
-        if (this.canvas.parentNode) this.canvas.parentNode.removeChild(this.canvas);
+        this._gridData = null;
+        if (this.canvas && this.canvas.parentNode) this.canvas.parentNode.removeChild(this.canvas);
     }
 }

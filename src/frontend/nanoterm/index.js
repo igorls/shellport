@@ -129,6 +129,7 @@ class NanoTermV2 {
 
         // Rendering
         this.renderPending = false;
+        this._isDestroyed = false;
 
         // Resize debounce
         this._resizeDebounceTimer = null;
@@ -152,6 +153,7 @@ class NanoTermV2 {
         if (document.fonts && document.fonts.load) {
             const fontSpec = `${this.options.fontSize}px ${this.options.fontFamily}`;
             document.fonts.load(fontSpec).then(() => {
+                if (this._isDestroyed) return; // Prevent updating dead terminals
                 this.measureChar();
                 // Always resize after font load — even if charWidth didn't change,
                 // data rendered with fallback font metrics needs to be repainted.
@@ -1075,9 +1077,11 @@ class NanoTermV2 {
     // -------------------------------------------------------------------------
 
     triggerRender() {
-        if (!this.renderPending) {
+        if (!this.renderPending && !this._isDestroyed) {
             this.renderPending = true;
-            requestAnimationFrame(() => this.render());
+            requestAnimationFrame(() => {
+                if (!this._isDestroyed) this.render();
+            });
         }
     }
 
@@ -1128,8 +1132,10 @@ class NanoTermV2 {
         this.canvas.addEventListener('wheel', e => this.onWheel(e));
         this.canvas.addEventListener('contextmenu', e => this.onContextMenu(e));
 
-        const resizeObserver = new ResizeObserver(() => this.resize());
-        resizeObserver.observe(this.container);
+        this._resizeObserver = new ResizeObserver(() => {
+            if (!this._isDestroyed) this.resize();
+        });
+        this._resizeObserver.observe(this.container);
 
         this.canvas.addEventListener('paste', e => this.onPaste(e));
     }
@@ -1384,8 +1390,18 @@ class NanoTermV2 {
     }
 
     destroy() {
+        this._isDestroyed = true;
         this.stopCursorBlink();
-        if (this.canvas.parentNode) this.canvas.parentNode.removeChild(this.canvas);
+        if (this._resizeObserver) {
+            this._resizeObserver.disconnect();
+            this._resizeObserver = null;
+        }
+        if (this.renderer && typeof this.renderer.destroy === 'function') {
+            this.renderer.destroy();
+            this.renderer = null;
+        } else if (this.canvas && this.canvas.parentNode) {
+            this.canvas.parentNode.removeChild(this.canvas);
+        }
     }
 }
 
