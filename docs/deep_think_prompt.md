@@ -1,84 +1,93 @@
-# Pixel-Perfect Arc Rendering & Font Resize Stability — Round 3
+# Bug Hunt Review — ShellPort NanoTermV2 Mouse Protocol
 
 ## Project Context
 
-NanoTermV2 is a zero-dependency WebGL2 terminal emulator rendering to `<canvas>`. The WebGL renderer uses a full-screen quad fragment shader with RGBA32UI data textures and a dynamic glyph atlas. Box-drawing characters (U+2500–U+257F) are rendered procedurally in the shader.
+ShellPort is a web-based terminal emulator using a custom NanoTermV2 engine. It renders terminal output via WebGL with a glyph atlas and procedural box-drawing. The terminal connects to a backend server over WebSocket, which spawns a real PTY (on Unix) or piped shell (on Windows). User keystrokes and mouse events are sent from the browser → WebSocket → PTY stdin.
 
-In Round 2, we replaced the circular arc SDF with an elliptical arc using algebraic distance (`|f|/|∇f|`). The quadrant assignments were also corrected. However, the rendering still has visible problems.
+Key files:
+- `src/frontend/nanoterm/index.js` — Terminal core: VT parser, input handling, mouse tracking state machine, event handlers
+- `src/frontend/nanoterm/webgl-renderer.js` — WebGL rendering engine
+- `test/shellport-test-server.ts` — Test server that spawns PTY sessions
+- `test/shellport-test.html` — Test harness UI
+
+The terminal runs with `TERM=xterm-256color` and reports `TERM_PROGRAM=WezTerm`.
+
+## Review Scope
+
+**htop mouse clicks do not trigger column sorting or button presses**, despite the mouse protocol appearing to function correctly at the transport level. We need to identify why htop doesn't respond to click events.
+
+### What Works
+- htop enables mouse tracking: `?1000h` (normal tracking) and `?1006h` (SGR protocol) are correctly parsed and stored
+- `onMouseDown` fires, `sendMouseReport` generates SGR sequences like `\x1b[<0;48;9M` (down) and `\x1b[<3;48;9m` (up)
+- htop closes its help screen on mouse click — proving the SGR sequences reach the PTY and ncurses processes them
+- Keyboard arrows work correctly after implementing DECCKM (`?1h`)
+- Other TUI programs (vim, less) respond to arrows normally
+
+### What Doesn't Work
+- Clicking htop column headers (PID, USER, CPU%, MEM%) does NOT sort columns
+- Clicking htop bottom function keys (F1, F2, etc.) does NOT activate them
+- Clicking a process row does NOT highlight it
+- The user reports that in Ghostty terminal, all of these mouse interactions work correctly with the same htop binary
+
+### Debug Evidence
+Console logs from the browser confirm:
+```
+[MOUSE] tracking=1000
+[MOUSE] protocol=sgr
+[MOUSE] mouseDown btn=0 tracking=1000 shift=false
+[MOUSE] SGR report: type=down btn=0 mods=0 x=48 y=9 seq="\x1b[<0;48;9M"
+[MOUSE] SGR report: type=up btn=3 mods=0 x=48 y=9 seq="\x1b[<3;48;9m"
+```
 
 ## Attached Context Packs
 
-| File | Contents | Tokens |
-|------|----------|--------|
-| `context_full.md` | Full NanoTermV2 source: `index.js`, `webgl-renderer.js`, `canvas-renderer.js`, `constants.js` | ~25K |
-
-## Problem 1: Arc Aliasing & Corner Gaps
-
-Screenshots show the rounded corner arcs at default font size (14px) and enlarged (zoomed in browser):
-- The arc line is **not anti-aliased** — it uses a hard `if (dist < 0.5) hit = true` threshold producing visible staircase artifacts
-- The arc endpoints **don't precisely meet** the straight segment endpoints at cell edge midpoints, leaving subtle gaps visible especially at larger font sizes
-- The straight box-drawing segments (U+2500 horizontal, U+2502 vertical) use `thinH * 0.5 + 0.001` as their half-width, but the arc uses a different thickness model (`dist < 0.5`), so there's a **thickness mismatch** at the junction
-
-The current shader code for rounded corners (find `0x256D` in `webgl-renderer.js`):
-```glsl
-if (inQuadrant) {
-    vec2 d = px - center;
-    float f = (d.x*d.x)/(cx*cx) + (d.y*d.y)/(cy*cy) - 1.0;
-    vec2 grad = vec2(2.0*d.x/(cx*cx), 2.0*d.y/(cy*cy));
-    float dist = abs(f) / length(grad);
-    if (dist < 0.5) hit = true;
-}
-```
-
-### What needs to be fixed:
-1. **Anti-aliasing**: Use `smoothstep` instead of a hard threshold to produce sub-pixel blending at arc edges
-2. **Thickness matching**: The arc stroke width must exactly match the straight segment thickness (which uses `thinH` / `thinW` values computed as `1.0 / u_charSize.y` and `1.0 / u_charSize.x`)
-3. **Junction precision**: The ellipse must pass exactly through the cell edge midpoints `(cx, 0)`, `(cx, charH)`, `(0, cy)`, `(charW, cy)` — verify the math guarantees this
-
-## Problem 2: Font Size Change Breaks Rendering
-
-The test page now has font size controls (−/+ buttons). When changing font size:
-- The terminal is destroyed and recreated with a new `NanoTermV2` instance
-- The glyph atlas, grid texture, and WebGL resources are recreated
-- However, **rendering breaks** after font size change — unclear what specifically, but the user reported issues
-
-### What needs to be fixed:
-1. Review the `destroy()` method in WebGLRenderer — does it properly clean up ALL GL resources?
-2. Review how `measureChar()` and `_resetAtlas()` behave when the renderer is recreated
-3. Check if the cached `_gridData` array (added in Round 2 Fix #5) could be stale across recreations
-4. Check if `_atlasDpr`, `_atlasCharW`, `_atlasCharH` are properly initialized on recreation
-
-## Problem 3: Straight Segment Thickness Model
-
-The current straight-line box drawing uses `thinH` and `thinW` (1 pixel in UV space) with an additional `+ 0.001` fudge factor. Review whether:
-1. The `+ 0.001` epsilon is appropriate or causes visual artifacts
-2. The thickness model for weight=1 (thin), weight=2 (thick), weight=3 (double) is correct
-3. Segments extend exactly from N/S/E/W cell edges to center in UV space
+| File             | Contents                                                | Token Estimate |
+| ---------------- | ------------------------------------------------------- | -------------- |
+| `context_full.md` | All JS/TS/HTML source files (index.js, webgl-renderer.js, test server, test HTML) | ~75K |
 
 ## Focus Areas
 
-### 1. Sub-Pixel Anti-Aliased Elliptical Arc (HIGHEST PRIORITY)
-- Replace `if (dist < threshold) hit = true` with a `smoothstep` blend
-- The `color` output should interpolate between `bgColor` and `fgColor` based on sub-pixel coverage
-- Ensure the stroke width exactly matches the straight segment's `thinH * 0.5 + epsilon`
-- Verify the ellipse algebra: with center at corner (charW, charH) and semi-axes (cx, cy), the ellipse equation `(x-charW)²/cx² + (y-charH)²/cy² = 1` should yield points (cx, charH) and (charW, cy) — verify these are the exact cell edge midpoints
+1. **SGR Mouse Protocol Compliance** — Compare our SGR mouse report format against the xterm specification. Specifically:
+   - Is the button encoding correct for left-click down (`0`) and release (`3`)?
+   - Is the SGR release format `\x1b[<3;x;ym` correct? Some implementations use `\x1b[<0;x;ym` for release. Check what ncurses/htop expects.
+   - Should there be separate button tracking for the release event (preserving the original button number)?
+   - Does htop/ncurses expect both `?1000h` AND `?1002h` for full interaction, or just `?1000h`?
 
-### 2. Font Size Change Stability
-- Trace the full lifecycle: `NanoTermV2.destroy()` → `WebGLRenderer.destroy()` → `new NanoTermV2()` → `new WebGLRenderer()`
-- Identify any leaked state, stale caches, or missing reinitialization
-- Check if the GL context is properly lost/recreated or reused
+2. **Coordinate System** — Verify the 1-based coordinate calculation:
+   - The current formula: `Math.max(1, Math.floor((clientX - rect.left - pad) / charWidth) + 1)`
+   - Is the padding subtraction correct? Compare what `getBoundingClientRect()` returns vs what the terminal padding does
+   - Does the canvas have any CSS transform or scaling that could shift coordinates?
 
-### 3. Thickness Consistency
-- Map the straight segment thickness model to match the arc thickness precisely
-- Both should use the same `lineWidth` constant expressed in the same coordinate space (pixels or UV)
+3. **DA (Device Attributes) and Terminal Identification** — Check if our DA response triggers different mouse behavior:
+   - We respond to DA1 with `\x1b[>0;10;1c` — does ncurses interpret this as a terminal that doesn't support SGR mouse?
+   - We respond to DA2 with `\x1b[?62;22c` — is this well-formed? Should it be `\x1b[>` instead of `\x1b[?`?
+   - Check if `TERM_PROGRAM=WezTerm` causes ncurses to expect specific mouse behavior
+
+4. **Event Timing and Sequencing** — Could there be a race condition?
+   - Is the down+up pair sent too quickly (within the same event loop tick)?
+   - Does the WebSocket batch them into a single frame?
+   - Should we add a small delay between down and up?
+
+5. **Mouse Mode State Machine** — Verify the setMode/resetMode handling:
+   - When htop sends multiple mode sets (e.g., `?1000h` then `?1002h`), do they override correctly?
+   - Is there any case where `mouseTracking` gets reset to 0 unexpectedly?
+   - Check if the help screen close works because it uses a simpler "any key" handler vs column sorting needing proper coordinates
+
+6. **Data Transport** — Check the WebSocket → PTY data path:
+   - Client sends string via `TextEncoder.encode()` → binary WebSocket message
+   - Server receives binary → `TextDecoder.decode()` → `terminal.write(string)`
+   - Could the decode/encode round-trip corrupt the escape sequences?
+   - Is `terminal.write()` (Bun's PTY API) equivalent to writing raw bytes to a file descriptor?
 
 ## Output Format
 
-For each finding:
-- **Severity**: CRITICAL / HIGH / MEDIUM / LOW
-- **File**: filename and line numbers
-- **Category**: which focus area (1-3)
-- **Description**: what the issue is
-- **Suggested Fix**: concrete GLSL/JS code
+For each finding, provide:
 
-End with: top 3 issues, overall assessment.
+- **Severity**: CRITICAL / HIGH / MEDIUM / LOW
+- **File**: path and line numbers
+- **Category**: which focus area
+- **Description**: what the bug is
+- **Impact**: what happens in production
+- **Suggested Fix**: concrete code changes with before/after
+
+Group findings by severity. End with a summary: total counts, top 3 issues, overall assessment.
