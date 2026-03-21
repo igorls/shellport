@@ -1230,21 +1230,22 @@ class NanoTermV2 {
     }
 
     onMouseDown(e) {
-        if (e.button === 0) {
-            if (this.mouseTracking && !e.shiftKey) {
-                this.sendMouseReport(e, 'down');
-            } else {
-                this.isSelecting = true;
-                this.selectionStart = this.screenToCell(e.clientX, e.clientY);
-                this.selection = null; // Don't create 0-width selection (traps Ctrl+C)
-            }
+        if (this.mouseTracking && !e.shiftKey) {
+            e.preventDefault();
+            this.sendMouseReport(e, 'down');
+        } else if (e.button === 0) {
+            this.isSelecting = true;
+            this.selectionStart = this.screenToCell(e.clientX, e.clientY);
+            this.selection = null; // Don't create 0-width selection (traps Ctrl+C)
         }
         this.canvas.focus();
     }
 
     onMouseMove(e) {
         if (this.mouseTracking && (this.mouseTracking === 1002 || this.mouseTracking === 1003) && !e.shiftKey) {
-            if (this.mouseTracking === 1003 || this.isSelecting || e.buttons === 1) this.sendMouseReport(e, this.mouseTracking === 1003 && e.buttons === 0 ? 'move' : 'drag');
+            if (this.mouseTracking === 1003 || e.buttons > 0) {
+                this.sendMouseReport(e, e.buttons === 0 ? 'move' : 'drag');
+            }
         } else if (this.isSelecting) {
             const cell = this.screenToCell(e.clientX, e.clientY);
             if (this.selectionStart) {
@@ -1259,21 +1260,25 @@ class NanoTermV2 {
     }
 
     onMouseUp(e) {
-        if (e.button === 0) {
-            if (this.mouseTracking && !e.shiftKey) this.sendMouseReport(e, 'up');
+        if (this.mouseTracking && !e.shiftKey) {
+            e.preventDefault();
+            this.sendMouseReport(e, 'up');
+        } else if (e.button === 0) {
             this.isSelecting = false;
         }
     }
 
     sendMouseReport(e, type) {
         const rect = this.canvas.getBoundingClientRect();
-        const x = Math.floor((e.clientX - rect.left) / this.charWidth) + 1;
-        const y = Math.floor((e.clientY - rect.top) / this.charHeight) + 1;
+        const pad = this.options.padding || 6;
+        // Account for terminal padding — chars start after pad offset
+        const x = Math.max(1, Math.floor((e.clientX - rect.left - pad) / this.charWidth) + 1);
+        const y = Math.max(1, Math.floor((e.clientY - rect.top - pad) / this.charHeight) + 1);
 
-        let button = e.button;
+        let button = e.button; // 0=left, 1=middle, 2=right
         if (type === 'up') button = 3;
         else if (type === 'move') button = 35; // No button pressed — mode 1003 passive movement
-        else if (type === 'drag') button = 32 + (e.buttons & 1 ? 0 : (e.buttons & 2 ? 1 : (e.buttons & 4 ? 2 : 0)));
+        else if (type === 'drag') button = 32 + (e.buttons & 1 ? 0 : (e.buttons & 2 ? 2 : (e.buttons & 4 ? 1 : 0)));
         else if (type === 'scroll') button = e.button; // Already set by caller
 
         let mods = (e.shiftKey ? 4 : 0) + (e.altKey ? 8 : 0) + (e.ctrlKey ? 16 : 0);
