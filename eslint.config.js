@@ -1,5 +1,5 @@
-import eslint from '@eslint/js';
-import tseslint from 'typescript-eslint';
+import eslint from '@eslint/js'
+import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
   eslint.configs.recommended,
@@ -18,6 +18,35 @@ export default tseslint.config(
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-non-null-assertion': 'warn',
+      '@typescript-eslint/naming-convention': [
+        'error',
+        {
+          selector: 'variable',
+          format: ['camelCase', 'UPPER_CASE', 'PascalCase'],
+          leadingUnderscore: 'allow',
+          trailingUnderscore: 'allow',
+        },
+        {
+          selector: 'variable',
+          filter: {
+            regex: '^__.*',
+            match: true,
+          },
+          format: null,
+        },
+        {
+          selector: 'function',
+          format: ['camelCase', 'PascalCase'],
+        },
+        {
+          selector: 'typeLike',
+          format: ['PascalCase'],
+        },
+        {
+          selector: 'enum',
+          format: ['PascalCase', 'UPPER_CASE'],
+        },
+      ],
       'no-console': 'off',
       'no-control-regex': 'off',
     },
@@ -40,4 +69,4 @@ export default tseslint.config(
       'src/frontend/nanoterm/**/*.js',
     ],
   }
-);
+)

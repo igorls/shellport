@@ -9,16 +9,16 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import {
-    CELL_WORDS,
-    CELL_CP_SHIFT,
-    CELL_FLAGS_MASK,
-    COLOR_DEFAULT,
-    SPACE_CP,
-    ATTR,
-    BOX_DRAWING_SEGMENTS,
-    hexToRGBA,
-    rgbaToCSS
-} from './constants.js';
+  CELL_WORDS,
+  CELL_CP_SHIFT,
+  CELL_FLAGS_MASK,
+  COLOR_DEFAULT,
+  SPACE_CP,
+  ATTR,
+  BOX_DRAWING_SEGMENTS,
+  hexToRGBA,
+  rgbaToCSS,
+} from './constants.js'
 
 // ── Shader Sources ──────────────────────────────────────────────────────────
 
@@ -32,7 +32,7 @@ void main() {
     float y = float((gl_VertexID & 2) << 1) - 1.0;
     v_uv = vec2((x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5); // flip Y for top-left origin
     gl_Position = vec4(x, y, 0.0, 1.0);
-}`;
+}`
 
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
@@ -428,574 +428,645 @@ void main() {
     }
 
     fragColor = vec4(color.rgb, 1.0);
-}`;
+}`
 
 // ── Atlas Constants ─────────────────────────────────────────────────────────
 
-const ATLAS_SIZE = 2048;      // Atlas texture size (2048×2048)
+const ATLAS_SIZE = 2048 // Atlas texture size (2048×2048)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // WebGLRenderer Class
 // ═══════════════════════════════════════════════════════════════════════════
 
 export class WebGLRenderer {
-    constructor(container, options, colors) {
-        this.options = options;
-        this.colors = colors;
-        this.charWidth = 0;
-        this.charHeight = 0;
-        this._renderCols = 0;
+  constructor(container, options, colors) {
+    this.options = options
+    this.colors = colors
+    this.charWidth = 0
+    this.charHeight = 0
+    this._renderCols = 0
 
-        // Theme colors as RGBA uint32
-        this.themeFgRGBA = hexToRGBA(colors.foreground);
-        this.themeBgRGBA = hexToRGBA(colors.background);
+    // Theme colors as RGBA uint32
+    this.themeFgRGBA = hexToRGBA(colors.foreground)
+    this.themeBgRGBA = hexToRGBA(colors.background)
 
-        // Glyph availability cache (shared with CanvasRenderer approach)
-        this._glyphCache = new Map();
-        this._puaAvailable = false;
-        this._tofuData = null;
+    // Glyph availability cache (shared with CanvasRenderer approach)
+    this._glyphCache = new Map()
+    this._puaAvailable = false
+    this._tofuData = null
 
-        // Atlas state
-        this._atlasMap = new Map();  // codepoint|flags → atlasIndex (1-based)
-        this._atlasNextSlot = 1;     // next free slot (1-based, 0 = empty)
-        this._atlasCanvas = null;
-        this._atlasCtx = null;
-        this._atlasSlotsPerRow = 0;
+    // Atlas state
+    this._atlasMap = new Map() // codepoint|flags → atlasIndex (1-based)
+    this._atlasNextSlot = 1 // next free slot (1-based, 0 = empty)
+    this._atlasCanvas = null
+    this._atlasCtx = null
+    this._atlasSlotsPerRow = 0
 
-        // WebGL state
-        this.gl = null;
-        this.program = null;
-        this.uniforms = {};
-        this.gridTexture = null;
-        this.atlasTexture = null;
-        this.boxTexture = null;
-        this._lastGridCols = 0;
-        this._lastGridRows = 0;
+    // WebGL state
+    this.gl = null
+    this.program = null
+    this.uniforms = {}
+    this.gridTexture = null
+    this.atlasTexture = null
+    this.boxTexture = null
+    this._lastGridCols = 0
+    this._lastGridRows = 0
 
-        // Create canvas
-        this.canvas = document.createElement('canvas');
-        this.canvas.className = 'term-canvas';
-        this.canvas.tabIndex = 0;
-        container.appendChild(this.canvas);
+    // Create canvas
+    this.canvas = document.createElement('canvas')
+    this.canvas.className = 'term-canvas'
+    this.canvas.tabIndex = 0
+    container.appendChild(this.canvas)
 
-        // Init WebGL2
-        this._initGL();
+    // Init WebGL2
+    this._initGL()
+  }
+
+  // ── WebGL2 Initialization ───────────────────────────────────────────────
+
+  _initGL() {
+    const gl = this.canvas.getContext('webgl2', {
+      alpha: false,
+      antialias: false,
+      premultipliedAlpha: false,
+      preserveDrawingBuffer: false,
+    })
+
+    if (!gl) throw new Error('WebGL2 not supported')
+    this.gl = gl
+
+    // Compile shaders
+    const vs = this._compileShader(gl.VERTEX_SHADER, VERTEX_SHADER)
+    const fs = this._compileShader(gl.FRAGMENT_SHADER, FRAGMENT_SHADER)
+
+    // Link program
+    const prog = gl.createProgram()
+    gl.attachShader(prog, vs)
+    gl.attachShader(prog, fs)
+    gl.linkProgram(prog)
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      throw new Error('Shader link failed: ' + gl.getProgramInfoLog(prog))
+    }
+    this.program = prog
+    gl.useProgram(prog)
+
+    // Cache uniform locations
+    const names = [
+      'u_gridTex',
+      'u_atlasTex',
+      'u_boxTex',
+      'u_gridSize',
+      'u_charSize',
+      'u_canvasSize',
+      'u_padding',
+      'u_atlasGridSize',
+      'u_atlasTexSize',
+      'u_atlasCellSize',
+      'u_defaultFg',
+      'u_defaultBg',
+      'u_cursorPos',
+      'u_cursorVisible',
+      'u_cursorColor',
+      'u_selection',
+    ]
+    for (const n of names) {
+      this.uniforms[n] = gl.getUniformLocation(prog, n)
     }
 
-    // ── WebGL2 Initialization ───────────────────────────────────────────────
+    // Create textures
+    this.gridTexture = this._createTexture(gl.TEXTURE0)
+    this.atlasTexture = this._createTexture(gl.TEXTURE1)
+    this.boxTexture = this._createTexture(gl.TEXTURE2)
 
-    _initGL() {
-        const gl = this.canvas.getContext('webgl2', {
-            alpha: false,
-            antialias: false,
-            premultipliedAlpha: false,
-            preserveDrawingBuffer: false,
-        });
+    // Bind texture units
+    gl.uniform1i(this.uniforms.u_gridTex, 0)
+    gl.uniform1i(this.uniforms.u_atlasTex, 1)
+    gl.uniform1i(this.uniforms.u_boxTex, 2)
 
-        if (!gl) throw new Error('WebGL2 not supported');
-        this.gl = gl;
+    // Upload box drawing segment data
+    this._uploadBoxTexture()
 
-        // Compile shaders
-        const vs = this._compileShader(gl.VERTEX_SHADER, VERTEX_SHADER);
-        const fs = this._compileShader(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+    // Create empty VAO (Full-Screen Quad uses gl_VertexID)
+    this._vao = gl.createVertexArray()
+  }
 
-        // Link program
-        const prog = gl.createProgram();
-        gl.attachShader(prog, vs);
-        gl.attachShader(prog, fs);
-        gl.linkProgram(prog);
-        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-            throw new Error('Shader link failed: ' + gl.getProgramInfoLog(prog));
-        }
-        this.program = prog;
-        gl.useProgram(prog);
+  _compileShader(type, source) {
+    const gl = this.gl
+    const shader = gl.createShader(type)
+    gl.shaderSource(shader, source)
+    gl.compileShader(shader)
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(shader)
+      gl.deleteShader(shader)
+      throw new Error(`Shader compile failed (${type === gl.VERTEX_SHADER ? 'VS' : 'FS'}): ${log}`)
+    }
+    return shader
+  }
 
-        // Cache uniform locations
-        const names = [
-            'u_gridTex', 'u_atlasTex', 'u_boxTex',
-            'u_gridSize', 'u_charSize', 'u_canvasSize', 'u_padding',
-            'u_atlasGridSize', 'u_atlasTexSize', 'u_atlasCellSize',
-            'u_defaultFg', 'u_defaultBg',
-            'u_cursorPos', 'u_cursorVisible', 'u_cursorColor',
-            'u_selection',
-        ];
-        for (const n of names) {
-            this.uniforms[n] = gl.getUniformLocation(prog, n);
-        }
+  _createTexture(unit) {
+    const gl = this.gl
+    const tex = gl.createTexture()
+    gl.activeTexture(unit)
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    return tex
+  }
 
-        // Create textures
-        this.gridTexture = this._createTexture(gl.TEXTURE0);
-        this.atlasTexture = this._createTexture(gl.TEXTURE1);
-        this.boxTexture = this._createTexture(gl.TEXTURE2);
+  _uploadBoxTexture() {
+    const gl = this.gl
+    // Upload BOX_DRAWING_SEGMENTS as 128×1 RGBA32UI texture
+    const count = BOX_DRAWING_SEGMENTS.length
+    const data = new Uint32Array(count * 4)
+    for (let i = 0; i < count; i++) {
+      const seg = BOX_DRAWING_SEGMENTS[i]
+      if (!seg) continue // null entries (rounded corners, diagonals) → zeros
+      data[i * 4 + 0] = seg[0] // left weight
+      data[i * 4 + 1] = seg[1] // right weight
+      data[i * 4 + 2] = seg[2] // up weight
+      data[i * 4 + 3] = seg[3] // down weight
+    }
+    gl.activeTexture(gl.TEXTURE2)
+    gl.bindTexture(gl.TEXTURE_2D, this.boxTexture)
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA32UI,
+      count,
+      1,
+      0,
+      gl.RGBA_INTEGER,
+      gl.UNSIGNED_INT,
+      data
+    )
+  }
 
-        // Bind texture units
-        gl.uniform1i(this.uniforms.u_gridTex, 0);
-        gl.uniform1i(this.uniforms.u_atlasTex, 1);
-        gl.uniform1i(this.uniforms.u_boxTex, 2);
+  // ── Font Measurement (CPU-side, identical to CanvasRenderer) ─────────────
 
-        // Upload box drawing segment data
-        this._uploadBoxTexture();
+  measureChar() {
+    const testCanvas = document.createElement('canvas')
+    const testCtx = testCanvas.getContext('2d')
+    const fontSize = this.options.fontSize
+    testCtx.font = `${fontSize}px ${this.options.fontFamily}`
+    const m = testCtx.measureText('W')
+    this.charWidth = Math.ceil(m.width)
+    const lineHeight = this.options.lineHeight || 1.15
+    this.charHeight = Math.ceil(fontSize * lineHeight)
 
-        // Create empty VAO (Full-Screen Quad uses gl_VertexID)
-        this._vao = gl.createVertexArray();
+    // Invalidate atlas on font change
+    this._resetAtlas()
+
+    // Probe PUA glyphs
+    this._tofuData = null
+    this._glyphCache.clear()
+    this._puaAvailable =
+      this._probeGlyph('\uE0B0') || this._probeGlyph('\uE0A0') || this._probeGlyph('\uF001')
+  }
+
+  // ── Glyph Probing (identical to CanvasRenderer) ─────────────────────────
+
+  _probeGlyph(ch) {
+    const fontSpec = `${this.options.fontSize}px ${this.options.fontFamily}`
+    const size = Math.max(24, this.options.fontSize + 8)
+
+    if (!this._tofuData) {
+      const ref = document.createElement('canvas')
+      ref.width = size
+      ref.height = size
+      const rctx = ref.getContext('2d', { willReadFrequently: true })
+      rctx.font = fontSpec
+      rctx.textBaseline = 'top'
+      rctx.fillStyle = '#fff'
+      rctx.fillText('\uFFFF', 2, 2)
+      this._tofuData = rctx.getImageData(0, 0, size, size).data
     }
 
-    _compileShader(type, source) {
-        const gl = this.gl;
-        const shader = gl.createShader(type);
-        gl.shaderSource(shader, source);
-        gl.compileShader(shader);
-        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-            const log = gl.getShaderInfoLog(shader);
-            gl.deleteShader(shader);
-            throw new Error(`Shader compile failed (${type === gl.VERTEX_SHADER ? 'VS' : 'FS'}): ${log}`);
-        }
-        return shader;
+    const probe = document.createElement('canvas')
+    probe.width = size
+    probe.height = size
+    const pctx = probe.getContext('2d', { willReadFrequently: true })
+    pctx.font = fontSpec
+    pctx.textBaseline = 'top'
+    pctx.fillStyle = '#fff'
+    pctx.fillText(ch, 2, 2)
+    const testData = pctx.getImageData(0, 0, size, size).data
+
+    let diff = 0
+    let hasPixels = false
+    for (let i = 3; i < testData.length; i += 4) {
+      if (testData[i] > 0) hasPixels = true
+      if (testData[i] !== this._tofuData[i]) diff++
     }
 
-    _createTexture(unit) {
-        const gl = this.gl;
-        const tex = gl.createTexture();
-        gl.activeTexture(unit);
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        return tex;
+    if (diff === 0 && hasPixels) return false
+    if (!hasPixels) return false
+    return true
+  }
+
+  _isGlyphRenderable(cp) {
+    if (cp < 0x0530) return true
+    if (cp >= 0x4e00 && cp <= 0x9fff) return true
+    if (cp >= 0xe000 && cp <= 0xf8ff) return this._puaAvailable
+    if (cp >= 0xf0000) return this._puaAvailable
+    const cached = this._glyphCache.get(cp)
+    if (cached !== undefined) return cached
+    const renderable = this._probeGlyph(String.fromCodePoint(cp))
+    this._glyphCache.set(cp, renderable)
+    return renderable
+  }
+
+  // ── Glyph Atlas ─────────────────────────────────────────────────────────
+
+  _resetAtlas() {
+    this._atlasMap.clear()
+    this._atlasNextSlot = 1
+
+    if (this.charWidth > 0 && this.charHeight > 0) {
+      const dpr = window.devicePixelRatio || 1
+      this._atlasDpr = dpr
+      this._atlasCharW = Math.ceil(this.charWidth * dpr)
+      this._atlasCharH = Math.ceil(this.charHeight * dpr)
+      this._atlasSlotsPerRow = Math.floor(ATLAS_SIZE / this._atlasCharW)
     }
 
-    _uploadBoxTexture() {
-        const gl = this.gl;
-        // Upload BOX_DRAWING_SEGMENTS as 128×1 RGBA32UI texture
-        const count = BOX_DRAWING_SEGMENTS.length;
-        const data = new Uint32Array(count * 4);
-        for (let i = 0; i < count; i++) {
-            const seg = BOX_DRAWING_SEGMENTS[i];
-            if (!seg) continue; // null entries (rounded corners, diagonals) → zeros
-            data[i * 4 + 0] = seg[0]; // left weight
-            data[i * 4 + 1] = seg[1]; // right weight
-            data[i * 4 + 2] = seg[2]; // up weight
-            data[i * 4 + 3] = seg[3]; // down weight
-        }
-        gl.activeTexture(gl.TEXTURE2);
-        gl.bindTexture(gl.TEXTURE_2D, this.boxTexture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, count, 1, 0,
-            gl.RGBA_INTEGER, gl.UNSIGNED_INT, data);
+    // Create/recreate offscreen atlas canvas
+    this._atlasCanvas = document.createElement('canvas')
+    this._atlasCanvas.width = ATLAS_SIZE
+    this._atlasCanvas.height = ATLAS_SIZE
+    this._atlasCtx = this._atlasCanvas.getContext('2d', { willReadFrequently: true })
+
+    // Clear atlas canvas
+    this._atlasCtx.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE)
+
+    // Upload empty atlas texture
+    if (this.gl && this.atlasTexture) {
+      const gl = this.gl
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture)
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        ATLAS_SIZE,
+        ATLAS_SIZE,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null
+      )
+    }
+  }
+
+  /**
+   * Get or create atlas slot for a codepoint with given flags (bold/italic).
+   * Returns the 1-based atlas index, or 0 if the glyph can't be rendered.
+   */
+  _getAtlasIndex(cp, flags) {
+    // Skip special characters (rendered procedurally in shader)
+    if (cp >= 0x2500 && cp <= 0x259f) return 0
+    if (cp >= 0x2800 && cp <= 0x28ff) return 0
+    if (cp === SPACE_CP || cp === 0) return 0
+
+    // Key includes bold/italic flags for distinct atlas entries
+    const styleFlags = flags & (ATTR.BOLD | ATTR.ITALIC)
+    const key = (cp << 4) | styleFlags
+
+    const existing = this._atlasMap.get(key)
+    if (existing !== undefined) return existing
+
+    // Check if glyph is renderable
+    if (!this._isGlyphRenderable(cp)) {
+      this._atlasMap.set(key, 0)
+      return 0
     }
 
-    // ── Font Measurement (CPU-side, identical to CanvasRenderer) ─────────────
-
-    measureChar() {
-        const testCanvas = document.createElement('canvas');
-        const testCtx = testCanvas.getContext('2d');
-        const fontSize = this.options.fontSize;
-        testCtx.font = `${fontSize}px ${this.options.fontFamily}`;
-        const m = testCtx.measureText('W');
-        this.charWidth = Math.ceil(m.width);
-        const lineHeight = this.options.lineHeight || 1.15;
-        this.charHeight = Math.ceil(fontSize * lineHeight);
-
-        // Invalidate atlas on font change
-        this._resetAtlas();
-
-        // Probe PUA glyphs
-        this._tofuData = null;
-        this._glyphCache.clear();
-        this._puaAvailable = this._probeGlyph('\uE0B0') ||
-                             this._probeGlyph('\uE0A0') ||
-                             this._probeGlyph('\uF001');
+    // Check atlas capacity
+    const maxSlots =
+      this._atlasSlotsPerRow * Math.floor(ATLAS_SIZE / (this._atlasCharH || this.charHeight))
+    if (this._atlasNextSlot >= maxSlots) {
+      // Atlas full — rebuild (clear and re-upload visible glyphs)
+      this._rebuildAtlas()
     }
 
-    // ── Glyph Probing (identical to CanvasRenderer) ─────────────────────────
+    // Assign slot
+    const slot = this._atlasNextSlot++
+    this._atlasMap.set(key, slot)
 
-    _probeGlyph(ch) {
-        const fontSpec = `${this.options.fontSize}px ${this.options.fontFamily}`;
-        const size = Math.max(24, this.options.fontSize + 8);
+    // Rasterize glyph to offscreen canvas at physical pixel size (HiDPI)
+    const dpr = this._atlasDpr || 1
+    const cw = this._atlasCharW || this.charWidth
+    const ch = this._atlasCharH || this.charHeight
+    const slotX = ((slot - 1) % this._atlasSlotsPerRow) * cw
+    const slotY = Math.floor((slot - 1) / this._atlasSlotsPerRow) * ch
 
-        if (!this._tofuData) {
-            const ref = document.createElement('canvas');
-            ref.width = size; ref.height = size;
-            const rctx = ref.getContext('2d', { willReadFrequently: true });
-            rctx.font = fontSpec;
-            rctx.textBaseline = 'top';
-            rctx.fillStyle = '#fff';
-            rctx.fillText('\uFFFF', 2, 2);
-            this._tofuData = rctx.getImageData(0, 0, size, size).data;
-        }
+    const ctx = this._atlasCtx
+    ctx.clearRect(slotX, slotY, cw, ch)
 
-        const probe = document.createElement('canvas');
-        probe.width = size; probe.height = size;
-        const pctx = probe.getContext('2d', { willReadFrequently: true });
-        pctx.font = fontSpec;
-        pctx.textBaseline = 'top';
-        pctx.fillStyle = '#fff';
-        pctx.fillText(ch, 2, 2);
-        const testData = pctx.getImageData(0, 0, size, size).data;
+    const fontParts = []
+    if (styleFlags & ATTR.BOLD) fontParts.push('bold')
+    if (styleFlags & ATTR.ITALIC) fontParts.push('italic')
+    fontParts.push(`${this.options.fontSize * dpr}px`)
+    fontParts.push(this.options.fontFamily)
+    ctx.font = fontParts.join(' ')
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = '#fff' // White glyph — shader tints with FG color via alpha
+    ctx.fillText(String.fromCodePoint(cp), slotX, slotY)
 
-        let diff = 0;
-        let hasPixels = false;
-        for (let i = 3; i < testData.length; i += 4) {
-            if (testData[i] > 0) hasPixels = true;
-            if (testData[i] !== this._tofuData[i]) diff++;
-        }
+    // Upload this single glyph to the GPU atlas texture
+    const gl = this.gl
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture)
+    // Extract just this glyph's pixels
+    const pixels = ctx.getImageData(slotX, slotY, cw, ch)
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, slotX, slotY, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, pixels.data)
 
-        if (diff === 0 && hasPixels) return false;
-        if (!hasPixels) return false;
-        return true;
+    return slot
+  }
+
+  _rebuildAtlas() {
+    // Clear and start over — simpler than LRU
+    this._atlasMap.clear()
+    this._atlasNextSlot = 1
+    this._atlasCtx.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE)
+  }
+
+  // ── Resize ──────────────────────────────────────────────────────────────
+
+  resizeCanvas(containerRect) {
+    const dpr = window.devicePixelRatio || 1
+    this.canvas.width = containerRect.width * dpr
+    this.canvas.height = containerRect.height * dpr
+    this.canvas.style.width = containerRect.width + 'px'
+    this.canvas.style.height = containerRect.height + 'px'
+
+    if (this.gl) {
+      this.gl.viewport(0, 0, this.canvas.width, this.canvas.height)
+    }
+  }
+
+  // ── Main Render ─────────────────────────────────────────────────────────
+
+  render(term) {
+    const gl = this.gl
+    if (!gl || !term.grid) return
+
+    const dpr = window.devicePixelRatio || 1
+    const cssWidth = this.canvas.width / dpr
+    const cssHeight = this.canvas.height / dpr
+    const pad = this.options.padding
+
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height)
+    gl.useProgram(this.program)
+
+    // ── Build visible grid snapshot ──
+    // Assemble visible rows into a contiguous Uint32Array for GPU upload
+    const { gridData, visibleCols, visibleRows } = this._buildVisibleGrid(term)
+
+    // ── Process atlas for all visible glyphs (BEFORE texture upload) ──
+    // This fills gridData[i*4+3] with atlas indices
+    this._updateAtlasForGrid(gridData, visibleCols, visibleRows)
+
+    // ── Upload grid data texture (now includes atlas indices) ──
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this.gridTexture)
+
+    if (visibleCols !== this._lastGridCols || visibleRows !== this._lastGridRows) {
+      // Reallocate texture
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA32UI,
+        visibleCols,
+        visibleRows,
+        0,
+        gl.RGBA_INTEGER,
+        gl.UNSIGNED_INT,
+        gridData
+      )
+      this._lastGridCols = visibleCols
+      this._lastGridRows = visibleRows
+    } else {
+      // Update existing texture
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        0,
+        0,
+        visibleCols,
+        visibleRows,
+        gl.RGBA_INTEGER,
+        gl.UNSIGNED_INT,
+        gridData
+      )
     }
 
-    _isGlyphRenderable(cp) {
-        if (cp < 0x0530) return true;
-        if (cp >= 0x4E00 && cp <= 0x9FFF) return true;
-        if (cp >= 0xE000 && cp <= 0xF8FF) return this._puaAvailable;
-        if (cp >= 0xF0000) return this._puaAvailable;
-        const cached = this._glyphCache.get(cp);
-        if (cached !== undefined) return cached;
-        const renderable = this._probeGlyph(String.fromCodePoint(cp));
-        this._glyphCache.set(cp, renderable);
-        return renderable;
+    // ── Set uniforms ──
+    gl.uniform2i(this.uniforms.u_gridSize, visibleCols, visibleRows)
+    gl.uniform2f(this.uniforms.u_charSize, this.charWidth, this.charHeight)
+    gl.uniform2f(this.uniforms.u_canvasSize, cssWidth, cssHeight)
+    gl.uniform1f(this.uniforms.u_padding, pad)
+
+    // Atlas info
+    gl.uniform1f(this.uniforms.u_atlasGridSize, this._atlasSlotsPerRow)
+    gl.uniform2f(this.uniforms.u_atlasTexSize, ATLAS_SIZE, ATLAS_SIZE)
+    gl.uniform2f(
+      this.uniforms.u_atlasCellSize,
+      this._atlasCharW || this.charWidth,
+      this._atlasCharH || this.charHeight
+    )
+
+    // Default colors
+    const dfg = this.themeFgRGBA
+    const dbg = this.themeBgRGBA
+    gl.uniform4f(
+      this.uniforms.u_defaultFg,
+      ((dfg >>> 24) & 0xff) / 255,
+      ((dfg >>> 16) & 0xff) / 255,
+      ((dfg >>> 8) & 0xff) / 255,
+      (dfg & 0xff) / 255
+    )
+    gl.uniform4f(
+      this.uniforms.u_defaultBg,
+      ((dbg >>> 24) & 0xff) / 255,
+      ((dbg >>> 16) & 0xff) / 255,
+      ((dbg >>> 8) & 0xff) / 255,
+      (dbg & 0xff) / 255
+    )
+
+    // Cursor
+    const cursorStyle = this.options.cursorStyle || 'block'
+    let cursorVis = 0
+    if (term.cursorVisible && term.focused) {
+      if (!this.options.cursorBlink || term.cursorBlinkState) {
+        if (cursorStyle === 'block') cursorVis = 1
+        else if (cursorStyle === 'underline') cursorVis = 2
+        else if (cursorStyle === 'bar') cursorVis = 3
+      }
+    }
+    gl.uniform2i(this.uniforms.u_cursorPos, term.cursorX, term.cursorY)
+    gl.uniform1i(this.uniforms.u_cursorVisible, cursorVis)
+
+    const cc = hexToRGBA(this.colors.cursor)
+    gl.uniform4f(
+      this.uniforms.u_cursorColor,
+      ((cc >>> 24) & 0xff) / 255,
+      ((cc >>> 16) & 0xff) / 255,
+      ((cc >>> 8) & 0xff) / 255,
+      (cc & 0xff) / 255
+    )
+
+    // Selection
+    if (term.selection) {
+      gl.uniform4i(
+        this.uniforms.u_selection,
+        term.selection.startCol,
+        term.selection.startRow,
+        term.selection.endCol,
+        term.selection.endRow
+      )
+    } else {
+      gl.uniform4i(this.uniforms.u_selection, -1, -1, -1, -1)
     }
 
-    // ── Glyph Atlas ─────────────────────────────────────────────────────────
+    // ── Draw ──
+    gl.bindVertexArray(this._vao)
+    gl.drawArrays(gl.TRIANGLES, 0, 3)
+    gl.bindVertexArray(null)
+  }
 
-    _resetAtlas() {
-        this._atlasMap.clear();
-        this._atlasNextSlot = 1;
+  // ── Build Visible Grid ──────────────────────────────────────────────────
 
-        if (this.charWidth > 0 && this.charHeight > 0) {
-            const dpr = window.devicePixelRatio || 1;
-            this._atlasDpr = dpr;
-            this._atlasCharW = Math.ceil(this.charWidth * dpr);
-            this._atlasCharH = Math.ceil(this.charHeight * dpr);
-            this._atlasSlotsPerRow = Math.floor(ATLAS_SIZE / this._atlasCharW);
+  _buildVisibleGrid(term) {
+    const cols = term.cols
+    const rows = term.rows
+    const scrollbackVisible = term.scrollbackOffset > 0 && !term.useAlternate
+
+    // Output: cols × rows RGBA32UI (4 uints per cell, 1 texel per cell)
+    // Cache the array to avoid per-frame garbage (Fix #5)
+    const size = cols * rows * 4
+    if (!this._gridData || this._gridData.length !== size) {
+      this._gridData = new Uint32Array(size)
+    }
+    const gridData = this._gridData
+
+    let destRow = 0
+
+    if (scrollbackVisible) {
+      const scrollbackStart = Math.max(0, term.scrollbackBuffer.length - term.scrollbackOffset)
+      const scrollbackRows = Math.min(term.scrollbackOffset, rows)
+
+      // Copy scrollback rows
+      for (let i = 0; i < scrollbackRows; i++) {
+        const idx = scrollbackStart + i
+        if (idx < term.scrollbackBuffer.length) {
+          const sbRow = term.scrollbackBuffer[idx]
+          const sbCols = sbRow.length / CELL_WORDS
+          const copyCount = Math.min(sbCols, cols)
+          const destOff = destRow * cols * 4
+          for (let x = 0; x < copyCount; x++) {
+            gridData[destOff + x * 4 + 0] = sbRow[x * CELL_WORDS + 0]
+            gridData[destOff + x * 4 + 1] = sbRow[x * CELL_WORDS + 1]
+            gridData[destOff + x * 4 + 2] = sbRow[x * CELL_WORDS + 2]
+            gridData[destOff + x * 4 + 3] = sbRow[x * CELL_WORDS + 3]
+          }
         }
+        destRow++
+      }
 
-        // Create/recreate offscreen atlas canvas
-        this._atlasCanvas = document.createElement('canvas');
-        this._atlasCanvas.width = ATLAS_SIZE;
-        this._atlasCanvas.height = ATLAS_SIZE;
-        this._atlasCtx = this._atlasCanvas.getContext('2d', { willReadFrequently: true });
-
-        // Clear atlas canvas
-        this._atlasCtx.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE);
-
-        // Upload empty atlas texture
-        if (this.gl && this.atlasTexture) {
-            const gl = this.gl;
-            gl.activeTexture(gl.TEXTURE1);
-            gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, ATLAS_SIZE, ATLAS_SIZE, 0,
-                gl.RGBA, gl.UNSIGNED_BYTE, null);
+      // Copy active grid rows
+      const activeStart = 0
+      const activeCount = rows - scrollbackRows
+      for (let y = 0; y < activeCount; y++) {
+        const srcOff = (activeStart + y) * cols * CELL_WORDS
+        const destOff = destRow * cols * 4
+        for (let x = 0; x < cols; x++) {
+          gridData[destOff + x * 4 + 0] = term.grid[srcOff + x * CELL_WORDS + 0]
+          gridData[destOff + x * 4 + 1] = term.grid[srcOff + x * CELL_WORDS + 1]
+          gridData[destOff + x * 4 + 2] = term.grid[srcOff + x * CELL_WORDS + 2]
+          gridData[destOff + x * 4 + 3] = term.grid[srcOff + x * CELL_WORDS + 3]
         }
+        destRow++
+      }
+    } else {
+      // Direct copy from active grid
+      for (let y = 0; y < rows; y++) {
+        const srcOff = y * cols * CELL_WORDS
+        const destOff = y * cols * 4
+        for (let x = 0; x < cols; x++) {
+          gridData[destOff + x * 4 + 0] = term.grid[srcOff + x * CELL_WORDS + 0]
+          gridData[destOff + x * 4 + 1] = term.grid[srcOff + x * CELL_WORDS + 1]
+          gridData[destOff + x * 4 + 2] = term.grid[srcOff + x * CELL_WORDS + 2]
+          gridData[destOff + x * 4 + 3] = term.grid[srcOff + x * CELL_WORDS + 3]
+        }
+      }
     }
 
-    /**
-     * Get or create atlas slot for a codepoint with given flags (bold/italic).
-     * Returns the 1-based atlas index, or 0 if the glyph can't be rendered.
-     */
-    _getAtlasIndex(cp, flags) {
-        // Skip special characters (rendered procedurally in shader)
-        if (cp >= 0x2500 && cp <= 0x259F) return 0;
-        if (cp >= 0x2800 && cp <= 0x28FF) return 0;
-        if (cp === SPACE_CP || cp === 0) return 0;
+    return { gridData, visibleCols: cols, visibleRows: rows }
+  }
 
-        // Key includes bold/italic flags for distinct atlas entries
-        const styleFlags = flags & (ATTR.BOLD | ATTR.ITALIC);
-        const key = (cp << 4) | styleFlags;
+  // ── Update Atlas for Visible Grid ───────────────────────────────────────
 
-        const existing = this._atlasMap.get(key);
-        if (existing !== undefined) return existing;
+  _updateAtlasForGrid(gridData, cols, rows) {
+    const total = cols * rows
+    let rebuilds = 0
+    let i = 0
 
-        // Check if glyph is renderable
-        if (!this._isGlyphRenderable(cp)) {
-            this._atlasMap.set(key, 0);
-            return 0;
-        }
+    while (i < total) {
+      const word0 = gridData[i * 4]
+      const cp = word0 >>> CELL_CP_SHIFT
+      const flags = word0 & CELL_FLAGS_MASK
 
-        // Check atlas capacity
-        const maxSlots = this._atlasSlotsPerRow * Math.floor(ATLAS_SIZE / (this._atlasCharH || this.charHeight));
-        if (this._atlasNextSlot >= maxSlots) {
-            // Atlas full — rebuild (clear and re-upload visible glyphs)
-            this._rebuildAtlas();
-        }
+      if (cp <= 32 || (cp >= 0x2500 && cp <= 0x259f) || (cp >= 0x2800 && cp <= 0x28ff)) {
+        i++
+        continue
+      }
 
-        // Assign slot
-        const slot = this._atlasNextSlot++;
-        this._atlasMap.set(key, slot);
+      const expectedSlot = this._atlasNextSlot
+      const atlasIdx = this._getAtlasIndex(cp, flags)
 
-        // Rasterize glyph to offscreen canvas at physical pixel size (HiDPI)
-        const dpr = this._atlasDpr || 1;
-        const cw = this._atlasCharW || this.charWidth;
-        const ch = this._atlasCharH || this.charHeight;
-        const slotX = ((slot - 1) % this._atlasSlotsPerRow) * cw;
-        const slotY = Math.floor((slot - 1) / this._atlasSlotsPerRow) * ch;
+      // Atlas wiped mid-frame! Restart loop to update invalid indices
+      if (this._atlasNextSlot < expectedSlot) {
+        rebuilds++
+        if (rebuilds > 1) {
+          gridData[i * 4 + 3] = atlasIdx
+          i++
+          continue
+        } // Failsafe
+        i = 0
+        continue
+      }
 
-        const ctx = this._atlasCtx;
-        ctx.clearRect(slotX, slotY, cw, ch);
-
-        const fontParts = [];
-        if (styleFlags & ATTR.BOLD) fontParts.push('bold');
-        if (styleFlags & ATTR.ITALIC) fontParts.push('italic');
-        fontParts.push(`${this.options.fontSize * dpr}px`);
-        fontParts.push(this.options.fontFamily);
-        ctx.font = fontParts.join(' ');
-        ctx.textBaseline = 'top';
-        ctx.fillStyle = '#fff'; // White glyph — shader tints with FG color via alpha
-        ctx.fillText(String.fromCodePoint(cp), slotX, slotY);
-
-        // Upload this single glyph to the GPU atlas texture
-        const gl = this.gl;
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, this.atlasTexture);
-        // Extract just this glyph's pixels
-        const pixels = ctx.getImageData(slotX, slotY, cw, ch);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, slotX, slotY,
-            cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, pixels.data);
-
-        return slot;
+      gridData[i * 4 + 3] = atlasIdx
+      i++
     }
+  }
 
-    _rebuildAtlas() {
-        // Clear and start over — simpler than LRU
-        this._atlasMap.clear();
-        this._atlasNextSlot = 1;
-        this._atlasCtx.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE);
+  // ── Lifecycle ───────────────────────────────────────────────────────────
+
+  updateTheme(colors) {
+    this.colors = colors
+    this.themeFgRGBA = hexToRGBA(colors.foreground)
+    this.themeBgRGBA = hexToRGBA(colors.background)
+    // No atlas rebuild needed — glyphs are white, shader tints with fg/bg
+  }
+
+  destroy() {
+    const gl = this.gl
+    if (gl) {
+      if (this.gridTexture) gl.deleteTexture(this.gridTexture)
+      if (this.atlasTexture) gl.deleteTexture(this.atlasTexture)
+      if (this.boxTexture) gl.deleteTexture(this.boxTexture)
+      if (this.program) gl.deleteProgram(this.program)
+      if (this._vao) gl.deleteVertexArray(this._vao)
+
+      // Forcibly return the WebGL context slot to the browser
+      const ext = gl.getExtension('WEBGL_lose_context')
+      if (ext) ext.loseContext()
+      this.gl = null
     }
-
-    // ── Resize ──────────────────────────────────────────────────────────────
-
-    resizeCanvas(containerRect) {
-        const dpr = window.devicePixelRatio || 1;
-        this.canvas.width = containerRect.width * dpr;
-        this.canvas.height = containerRect.height * dpr;
-        this.canvas.style.width = containerRect.width + 'px';
-        this.canvas.style.height = containerRect.height + 'px';
-
-        if (this.gl) {
-            this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-        }
-    }
-
-    // ── Main Render ─────────────────────────────────────────────────────────
-
-    render(term) {
-        const gl = this.gl;
-        if (!gl || !term.grid) return;
-
-        const dpr = window.devicePixelRatio || 1;
-        const cssWidth = this.canvas.width / dpr;
-        const cssHeight = this.canvas.height / dpr;
-        const pad = this.options.padding;
-
-        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-        gl.useProgram(this.program);
-
-        // ── Build visible grid snapshot ──
-        // Assemble visible rows into a contiguous Uint32Array for GPU upload
-        const { gridData, visibleCols, visibleRows } = this._buildVisibleGrid(term);
-
-        // ── Process atlas for all visible glyphs (BEFORE texture upload) ──
-        // This fills gridData[i*4+3] with atlas indices
-        this._updateAtlasForGrid(gridData, visibleCols, visibleRows);
-
-        // ── Upload grid data texture (now includes atlas indices) ──
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, this.gridTexture);
-
-        if (visibleCols !== this._lastGridCols || visibleRows !== this._lastGridRows) {
-            // Reallocate texture
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI,
-                visibleCols, visibleRows, 0,
-                gl.RGBA_INTEGER, gl.UNSIGNED_INT, gridData);
-            this._lastGridCols = visibleCols;
-            this._lastGridRows = visibleRows;
-        } else {
-            // Update existing texture
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0,
-                visibleCols, visibleRows,
-                gl.RGBA_INTEGER, gl.UNSIGNED_INT, gridData);
-        }
-
-        // ── Set uniforms ──
-        gl.uniform2i(this.uniforms.u_gridSize, visibleCols, visibleRows);
-        gl.uniform2f(this.uniforms.u_charSize, this.charWidth, this.charHeight);
-        gl.uniform2f(this.uniforms.u_canvasSize, cssWidth, cssHeight);
-        gl.uniform1f(this.uniforms.u_padding, pad);
-
-        // Atlas info
-        gl.uniform1f(this.uniforms.u_atlasGridSize, this._atlasSlotsPerRow);
-        gl.uniform2f(this.uniforms.u_atlasTexSize, ATLAS_SIZE, ATLAS_SIZE);
-        gl.uniform2f(this.uniforms.u_atlasCellSize, this._atlasCharW || this.charWidth, this._atlasCharH || this.charHeight);
-
-        // Default colors
-        const dfg = this.themeFgRGBA;
-        const dbg = this.themeBgRGBA;
-        gl.uniform4f(this.uniforms.u_defaultFg,
-            ((dfg >>> 24) & 0xFF) / 255, ((dfg >>> 16) & 0xFF) / 255,
-            ((dfg >>>  8) & 0xFF) / 255, (dfg & 0xFF) / 255);
-        gl.uniform4f(this.uniforms.u_defaultBg,
-            ((dbg >>> 24) & 0xFF) / 255, ((dbg >>> 16) & 0xFF) / 255,
-            ((dbg >>>  8) & 0xFF) / 255, (dbg & 0xFF) / 255);
-
-        // Cursor
-        const cursorStyle = this.options.cursorStyle || 'block';
-        let cursorVis = 0;
-        if (term.cursorVisible && term.focused) {
-            if (!this.options.cursorBlink || term.cursorBlinkState) {
-                if (cursorStyle === 'block') cursorVis = 1;
-                else if (cursorStyle === 'underline') cursorVis = 2;
-                else if (cursorStyle === 'bar') cursorVis = 3;
-            }
-        }
-        gl.uniform2i(this.uniforms.u_cursorPos, term.cursorX, term.cursorY);
-        gl.uniform1i(this.uniforms.u_cursorVisible, cursorVis);
-
-        const cc = hexToRGBA(this.colors.cursor);
-        gl.uniform4f(this.uniforms.u_cursorColor,
-            ((cc >>> 24) & 0xFF) / 255, ((cc >>> 16) & 0xFF) / 255,
-            ((cc >>>  8) & 0xFF) / 255, (cc & 0xFF) / 255);
-
-        // Selection
-        if (term.selection) {
-            gl.uniform4i(this.uniforms.u_selection,
-                term.selection.startCol, term.selection.startRow,
-                term.selection.endCol, term.selection.endRow);
-        } else {
-            gl.uniform4i(this.uniforms.u_selection, -1, -1, -1, -1);
-        }
-
-        // ── Draw ──
-        gl.bindVertexArray(this._vao);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-        gl.bindVertexArray(null);
-    }
-
-    // ── Build Visible Grid ──────────────────────────────────────────────────
-
-    _buildVisibleGrid(term) {
-        const cols = term.cols;
-        const rows = term.rows;
-        const scrollbackVisible = term.scrollbackOffset > 0 && !term.useAlternate;
-
-        // Output: cols × rows RGBA32UI (4 uints per cell, 1 texel per cell)
-        // Cache the array to avoid per-frame garbage (Fix #5)
-        const size = cols * rows * 4;
-        if (!this._gridData || this._gridData.length !== size) {
-            this._gridData = new Uint32Array(size);
-        }
-        const gridData = this._gridData;
-
-        let destRow = 0;
-
-        if (scrollbackVisible) {
-            const scrollbackStart = Math.max(0, term.scrollbackBuffer.length - term.scrollbackOffset);
-            const scrollbackRows = Math.min(term.scrollbackOffset, rows);
-
-            // Copy scrollback rows
-            for (let i = 0; i < scrollbackRows; i++) {
-                const idx = scrollbackStart + i;
-                if (idx < term.scrollbackBuffer.length) {
-                    const sbRow = term.scrollbackBuffer[idx];
-                    const sbCols = sbRow.length / CELL_WORDS;
-                    const copyCount = Math.min(sbCols, cols);
-                    const destOff = destRow * cols * 4;
-                    for (let x = 0; x < copyCount; x++) {
-                        gridData[destOff + x * 4 + 0] = sbRow[x * CELL_WORDS + 0];
-                        gridData[destOff + x * 4 + 1] = sbRow[x * CELL_WORDS + 1];
-                        gridData[destOff + x * 4 + 2] = sbRow[x * CELL_WORDS + 2];
-                        gridData[destOff + x * 4 + 3] = sbRow[x * CELL_WORDS + 3];
-                    }
-                }
-                destRow++;
-            }
-
-            // Copy active grid rows
-            const activeStart = 0;
-            const activeCount = rows - scrollbackRows;
-            for (let y = 0; y < activeCount; y++) {
-                const srcOff = (activeStart + y) * cols * CELL_WORDS;
-                const destOff = destRow * cols * 4;
-                for (let x = 0; x < cols; x++) {
-                    gridData[destOff + x * 4 + 0] = term.grid[srcOff + x * CELL_WORDS + 0];
-                    gridData[destOff + x * 4 + 1] = term.grid[srcOff + x * CELL_WORDS + 1];
-                    gridData[destOff + x * 4 + 2] = term.grid[srcOff + x * CELL_WORDS + 2];
-                    gridData[destOff + x * 4 + 3] = term.grid[srcOff + x * CELL_WORDS + 3];
-                }
-                destRow++;
-            }
-        } else {
-            // Direct copy from active grid
-            for (let y = 0; y < rows; y++) {
-                const srcOff = y * cols * CELL_WORDS;
-                const destOff = y * cols * 4;
-                for (let x = 0; x < cols; x++) {
-                    gridData[destOff + x * 4 + 0] = term.grid[srcOff + x * CELL_WORDS + 0];
-                    gridData[destOff + x * 4 + 1] = term.grid[srcOff + x * CELL_WORDS + 1];
-                    gridData[destOff + x * 4 + 2] = term.grid[srcOff + x * CELL_WORDS + 2];
-                    gridData[destOff + x * 4 + 3] = term.grid[srcOff + x * CELL_WORDS + 3];
-                }
-            }
-        }
-
-        return { gridData, visibleCols: cols, visibleRows: rows };
-    }
-
-    // ── Update Atlas for Visible Grid ───────────────────────────────────────
-
-    _updateAtlasForGrid(gridData, cols, rows) {
-        const total = cols * rows;
-        let rebuilds = 0;
-        let i = 0;
-
-        while (i < total) {
-            const word0 = gridData[i * 4];
-            const cp = word0 >>> CELL_CP_SHIFT;
-            const flags = word0 & CELL_FLAGS_MASK;
-
-            if (cp <= 32 || (cp >= 0x2500 && cp <= 0x259F) || (cp >= 0x2800 && cp <= 0x28FF)) {
-                i++; continue;
-            }
-
-            const expectedSlot = this._atlasNextSlot;
-            const atlasIdx = this._getAtlasIndex(cp, flags);
-
-            // Atlas wiped mid-frame! Restart loop to update invalid indices
-            if (this._atlasNextSlot < expectedSlot) {
-                rebuilds++;
-                if (rebuilds > 1) { gridData[i * 4 + 3] = atlasIdx; i++; continue; } // Failsafe
-                i = 0; continue;
-            }
-
-            gridData[i * 4 + 3] = atlasIdx;
-            i++;
-        }
-    }
-
-    // ── Lifecycle ───────────────────────────────────────────────────────────
-
-    updateTheme(colors) {
-        this.colors = colors;
-        this.themeFgRGBA = hexToRGBA(colors.foreground);
-        this.themeBgRGBA = hexToRGBA(colors.background);
-        // No atlas rebuild needed — glyphs are white, shader tints with fg/bg
-    }
-
-    destroy() {
-        const gl = this.gl;
-        if (gl) {
-            if (this.gridTexture) gl.deleteTexture(this.gridTexture);
-            if (this.atlasTexture) gl.deleteTexture(this.atlasTexture);
-            if (this.boxTexture) gl.deleteTexture(this.boxTexture);
-            if (this.program) gl.deleteProgram(this.program);
-            if (this._vao) gl.deleteVertexArray(this._vao);
-
-            // Forcibly return the WebGL context slot to the browser
-            const ext = gl.getExtension('WEBGL_lose_context');
-            if (ext) ext.loseContext();
-            this.gl = null;
-        }
-        this._gridData = null;
-        if (this.canvas && this.canvas.parentNode) this.canvas.parentNode.removeChild(this.canvas);
-    }
+    this._gridData = null
+    if (this.canvas && this.canvas.parentNode) this.canvas.parentNode.removeChild(this.canvas)
+  }
 }

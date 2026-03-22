@@ -5,142 +5,162 @@
  * Zero-dependency encrypted terminal bridge with built-in web UI.
  */
 
-import { startServer } from "./server.js";
-import { connectClient } from "./client.js";
-import { generateSecret } from "./crypto.js";
-import { generateTOTPSecret, loadTOTPSecret, saveTOTPSecret, deleteTOTPSecret, buildOTPAuthURI } from "./totp.js";
-import { printQR } from "./qr.js";
+import { startServer } from './server.js'
+import { connectClient } from './client.js'
+import { generateSecret } from './crypto.js'
+import {
+  generateTOTPSecret,
+  loadTOTPSecret,
+  saveTOTPSecret,
+  deleteTOTPSecret,
+  buildOTPAuthURI,
+} from './totp.js'
+import { printQR } from './qr.js'
 
-export const VERSION = "0.2.0";
+export const VERSION = '0.2.0'
 
 export interface ParsedArgs {
-    command: string;
-    port: number;
-    secret: string;
-    tailscale: string;
-    url: string;
-    noSecret: boolean;
-    requireApproval: boolean;
-    allowLocalhost: boolean;
-    quiet: boolean;
-    totp: boolean;
-    totpReset: boolean;
+  command: string
+  port: number
+  secret: string
+  tailscale: string
+  url: string
+  noSecret: boolean
+  requireApproval: boolean
+  allowLocalhost: boolean
+  quiet: boolean
+  totp: boolean
+  totpReset: boolean
 }
 
 /** Parse CLI arguments into a structured object. */
 export function parseArgs(argv: string[]): ParsedArgs {
-    const command = argv[0] || "help";
-    let port = 7681;
-    let secret = "";
-    let tailscale = "";
-    let url = "";
-    let noSecret = false;
-    let requireApproval = true;
-    let allowLocalhost = false;
-    let quiet = false;
-    let totp = true;
-    let totpReset = false;
+  const command = argv[0] || 'help'
+  let port = 7681
+  let secret = ''
+  let tailscale = ''
+  let url = ''
+  let noSecret = false
+  let requireApproval = true
+  let allowLocalhost = false
+  let quiet = false
+  let totp = true
+  let totpReset = false
 
-    for (let i = 1; i < argv.length; i++) {
-        if (argv[i] === "--port" || argv[i] === "-p") {
-            port = parseInt(argv[++i], 10);
-        } else if (argv[i] === "--secret" || argv[i] === "-s") {
-            secret = argv[++i];
-        } else if (argv[i] === "--no-secret") {
-            noSecret = true;
-        } else if (argv[i] === "--tailscale") {
-            tailscale = argv[++i];
-        } else if (argv[i] === "--no-approval") {
-            requireApproval = false;
-        } else if (argv[i] === "--no-totp") {
-            totp = false;
-        } else if (argv[i] === "--totp-reset") {
-            totpReset = true;
-        } else if (argv[i] === "--allow-localhost" || argv[i] === "--dev") {
-            allowLocalhost = true;
-        } else if (argv[i] === "--quiet" || argv[i] === "-q") {
-            quiet = true;
-        } else if (!argv[i].startsWith("--")) {
-            url = argv[i];
-        }
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i] === '--port' || argv[i] === '-p') {
+      port = parseInt(argv[++i], 10)
+    } else if (argv[i] === '--secret' || argv[i] === '-s') {
+      secret = argv[++i]
+    } else if (argv[i] === '--no-secret') {
+      noSecret = true
+    } else if (argv[i] === '--tailscale') {
+      tailscale = argv[++i]
+    } else if (argv[i] === '--no-approval') {
+      requireApproval = false
+    } else if (argv[i] === '--no-totp') {
+      totp = false
+    } else if (argv[i] === '--totp-reset') {
+      totpReset = true
+    } else if (argv[i] === '--allow-localhost' || argv[i] === '--dev') {
+      allowLocalhost = true
+    } else if (argv[i] === '--quiet' || argv[i] === '-q') {
+      quiet = true
+    } else if (!argv[i].startsWith('--')) {
+      url = argv[i]
     }
+  }
 
-    return { command, port, secret, tailscale, url, noSecret, requireApproval, allowLocalhost, quiet, totp, totpReset };
+  return {
+    command,
+    port,
+    secret,
+    tailscale,
+    url,
+    noSecret,
+    requireApproval,
+    allowLocalhost,
+    quiet,
+    totp,
+    totpReset,
+  }
 }
 
-const parsed = parseArgs(process.argv.slice(2));
+const parsed = parseArgs(process.argv.slice(2))
 
-if (parsed.command === "server" || parsed.command === "serve") {
-    let secret = parsed.secret || process.env.SHELLPORT_SECRET || "";
-    const secretExplicit = !!parsed.secret;
+if (parsed.command === 'server' || parsed.command === 'serve') {
+  let secret = parsed.secret || process.env.SHELLPORT_SECRET || ''
+  const secretExplicit = !!parsed.secret
 
-    if (!secret && !parsed.noSecret) {
-        secret = generateSecret();
-        if (!parsed.quiet) {
-            console.log(`[ShellPort] 🎲 Auto-generated session secret (not persisted)`);
-            console.log(`[ShellPort] 🌐 Open in browser: http://localhost:${parsed.port}/#${secret}`);
-        }
+  if (!secret && !parsed.noSecret) {
+    secret = generateSecret()
+    if (!parsed.quiet) {
+      console.log(`[ShellPort] 🎲 Auto-generated session secret (not persisted)`)
+      console.log(`[ShellPort] 🌐 Open in browser: http://localhost:${parsed.port}/#${secret}`)
+    }
+  }
+
+  if (secretExplicit && !parsed.quiet) {
+    console.log(
+      `[ShellPort] ⚠️  Using fixed secret. Auto-generated secrets (the default) are recommended for better security.`
+    )
+  }
+
+  // ─── TOTP Setup ───
+  let totpSecret: string | undefined
+
+  if (parsed.totp) {
+    // Handle --totp-reset
+    if (parsed.totpReset) {
+      deleteTOTPSecret()
+      console.log('[ShellPort] 🔄 TOTP secret reset. A new pairing will be generated.')
     }
 
-    if (secretExplicit && !parsed.quiet) {
-        console.log(`[ShellPort] ⚠️  Using fixed secret. Auto-generated secrets (the default) are recommended for better security.`);
+    // Load or generate TOTP secret
+    const existing = loadTOTPSecret()
+    if (existing) {
+      totpSecret = existing
+      if (!parsed.quiet) {
+        console.log('[ShellPort] 🔐 TOTP 2FA active (already paired)')
+      }
+    } else {
+      totpSecret = generateTOTPSecret()
+      saveTOTPSecret(totpSecret)
+
+      if (!parsed.quiet) {
+        console.log('')
+        console.log('  ┌─────────────────────────────────────────────────────┐')
+        console.log('  │   🔐 TOTP 2FA Setup — Scan with Authenticator App   │')
+        console.log('  └─────────────────────────────────────────────────────┘')
+
+        const uri = buildOTPAuthURI(totpSecret)
+        printQR(uri)
+
+        console.log(`  Manual entry key: ${totpSecret}`)
+        console.log(`  Algorithm: SHA1 | Digits: 6 | Period: 30s`)
+        console.log('')
+        console.log("  After pairing, this QR code won't be shown again.")
+        console.log('  Use --totp-reset to generate a new secret.')
+        console.log('')
+      }
     }
+  }
 
-    // ─── TOTP Setup ───
-    let totpSecret: string | undefined;
-
-    if (parsed.totp) {
-        // Handle --totp-reset
-        if (parsed.totpReset) {
-            deleteTOTPSecret();
-            console.log("[ShellPort] 🔄 TOTP secret reset. A new pairing will be generated.");
-        }
-
-        // Load or generate TOTP secret
-        const existing = loadTOTPSecret();
-        if (existing) {
-            totpSecret = existing;
-            if (!parsed.quiet) {
-                console.log("[ShellPort] 🔐 TOTP 2FA active (already paired)");
-            }
-        } else {
-            totpSecret = generateTOTPSecret();
-            saveTOTPSecret(totpSecret);
-
-            if (!parsed.quiet) {
-                console.log("");
-                console.log("  ┌─────────────────────────────────────────────────────┐");
-                console.log("  │   🔐 TOTP 2FA Setup — Scan with Authenticator App   │");
-                console.log("  └─────────────────────────────────────────────────────┘");
-
-                const uri = buildOTPAuthURI(totpSecret);
-                printQR(uri);
-
-                console.log(`  Manual entry key: ${totpSecret}`);
-                console.log(`  Algorithm: SHA1 | Digits: 6 | Period: 30s`);
-                console.log("");
-                console.log("  After pairing, this QR code won't be shown again.");
-                console.log("  Use --totp-reset to generate a new secret.");
-                console.log("");
-            }
-        }
-    }
-
-    startServer({
-        port: parsed.port,
-        secret,
-        tailscale: parsed.tailscale,
-        requireApproval: parsed.requireApproval,
-        allowLocalhost: parsed.allowLocalhost,
-        totp: parsed.totp,
-        totpSecret,
-    });
-} else if (parsed.command === "client" || parsed.command === "connect") {
-    connectClient({ url: parsed.url, secret: parsed.secret });
-} else if (parsed.command === "--version" || parsed.command === "-v") {
-    console.log(`shellport v${VERSION}`);
+  startServer({
+    port: parsed.port,
+    secret,
+    tailscale: parsed.tailscale,
+    requireApproval: parsed.requireApproval,
+    allowLocalhost: parsed.allowLocalhost,
+    totp: parsed.totp,
+    totpSecret,
+  })
+} else if (parsed.command === 'client' || parsed.command === 'connect') {
+  connectClient({ url: parsed.url, secret: parsed.secret })
+} else if (parsed.command === '--version' || parsed.command === '-v') {
+  console.log(`shellport v${VERSION}`)
 } else {
-    console.log(`
+  console.log(`
   ┌─────────────────────────────────────────┐
   │   ShellPort v${VERSION}                      │
   │   Encrypted terminal bridge             │
@@ -198,5 +218,5 @@ if (parsed.command === "server" || parsed.command === "serve") {
 
     # Open in browser
     # http://localhost:7681/#<secret>
-`);
+`)
 }

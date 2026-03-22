@@ -11,13 +11,13 @@
  * - Client includes its nonce in the first message
  */
 
-import type { DecodedFrame, FrameTypeValue } from "./types.js";
+import type { DecodedFrame, FrameTypeValue } from './types.js'
 
-export const PBKDF2_ITERATIONS = 100_000;
-export const NONCE_LENGTH = 16;
-const SALT_PREFIX = "shellport-v2";
+export const PBKDF2_ITERATIONS = 100_000
+export const NONCE_LENGTH = 16
+const SALT_PREFIX = 'shellport-v2'
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 2
 
 /**
  * Generate a cryptographically random URL-safe secret.
@@ -25,19 +25,19 @@ export const PROTOCOL_VERSION = 2;
  * Default 16 bytes = 128 bits of entropy.
  */
 export function generateSecret(bytes = 16): string {
-  const raw = crypto.getRandomValues(new Uint8Array(bytes));
+  const raw = crypto.getRandomValues(new Uint8Array(bytes))
   const b64 = btoa(String.fromCharCode(...raw))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-  return b64;
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+  return b64
 }
 
 /**
  * Generate a random nonce for per-session salt derivation.
  */
 export function generateNonce(): Uint8Array {
-  return crypto.getRandomValues(new Uint8Array(NONCE_LENGTH));
+  return crypto.getRandomValues(new Uint8Array(NONCE_LENGTH))
 }
 
 /**
@@ -48,13 +48,13 @@ export async function deriveSessionSalt(
   serverNonce: Uint8Array,
   clientNonce: Uint8Array
 ): Promise<Uint8Array> {
-  const data = new Uint8Array(serverNonce.length + clientNonce.length + SALT_PREFIX.length);
-  data.set(serverNonce, 0);
-  data.set(clientNonce, serverNonce.length);
-  data.set(new TextEncoder().encode(SALT_PREFIX), serverNonce.length + clientNonce.length);
-  
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return new Uint8Array(hash);
+  const data = new Uint8Array(serverNonce.length + clientNonce.length + SALT_PREFIX.length)
+  data.set(serverNonce, 0)
+  data.set(clientNonce, serverNonce.length)
+  data.set(new TextEncoder().encode(SALT_PREFIX), serverNonce.length + clientNonce.length)
+
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return new Uint8Array(hash)
 }
 
 /**
@@ -67,31 +67,33 @@ export async function deriveKey(
   secret: string,
   sessionSalt?: Uint8Array
 ): Promise<CryptoKey | null> {
-  if (!secret) return null;
+  if (!secret) return null
 
-  const enc = new TextEncoder();
+  const enc = new TextEncoder()
   const keyMaterial = await crypto.subtle.importKey(
-    "raw",
+    'raw',
     enc.encode(secret),
-    { name: "PBKDF2" },
+    { name: 'PBKDF2' },
     false,
-    ["deriveBits", "deriveKey"]
-  );
+    ['deriveBits', 'deriveKey']
+  )
 
-  const salt: BufferSource = sessionSalt ? sessionSalt.buffer as ArrayBuffer : enc.encode(SALT_PREFIX);
+  const salt: BufferSource = sessionSalt
+    ? (sessionSalt.buffer as ArrayBuffer)
+    : enc.encode(SALT_PREFIX)
 
   return crypto.subtle.deriveKey(
     {
-      name: "PBKDF2",
+      name: 'PBKDF2',
       salt,
       iterations: PBKDF2_ITERATIONS,
-      hash: "SHA-256",
+      hash: 'SHA-256',
     },
     keyMaterial,
-    { name: "AES-GCM", length: 256 },
+    { name: 'AES-GCM', length: 256 },
     false,
-    ["encrypt", "decrypt"]
-  );
+    ['encrypt', 'decrypt']
+  )
 }
 
 /**
@@ -102,23 +104,19 @@ export async function pack(
   type: FrameTypeValue,
   payload: Uint8Array
 ): Promise<Uint8Array> {
-  const frame = new Uint8Array(1 + payload.length);
-  frame[0] = type;
-  frame.set(payload, 1);
+  const frame = new Uint8Array(1 + payload.length)
+  frame[0] = type
+  frame.set(payload, 1)
 
-  if (!key) return frame;
+  if (!key) return frame
 
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    frame
-  );
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, frame)
 
-  const out = new Uint8Array(12 + ciphertext.byteLength);
-  out.set(iv, 0);
-  out.set(new Uint8Array(ciphertext), 12);
-  return out;
+  const out = new Uint8Array(12 + ciphertext.byteLength)
+  out.set(iv, 0)
+  out.set(new Uint8Array(ciphertext), 12)
+  return out
 }
 
 /**
@@ -129,27 +127,23 @@ export async function unpack(
   key: CryptoKey | null,
   data: ArrayBuffer
 ): Promise<DecodedFrame | null> {
-  let buf = new Uint8Array(data);
+  let buf = new Uint8Array(data)
 
   if (key) {
-    if (buf.length < 29) return null;
+    if (buf.length < 29) return null
     // Use subarray (zero-copy view) instead of slice (copy)
-    const iv = buf.subarray(0, 12);
+    const iv = buf.subarray(0, 12)
     try {
       buf = new Uint8Array(
-        await crypto.subtle.decrypt(
-          { name: "AES-GCM", iv },
-          key,
-          buf.subarray(12)
-        )
-      );
+        await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, buf.subarray(12))
+      )
     } catch {
-      return null;
+      return null
     }
   }
 
-  if (buf.length < 1) return null;
-  return { type: buf[0] as FrameTypeValue, payload: buf.subarray(1) };
+  if (buf.length < 1) return null
+  return { type: buf[0] as FrameTypeValue, payload: buf.subarray(1) }
 }
 
 /**
@@ -245,5 +239,5 @@ class SeqQueue {
   constructor() { this.p = Promise.resolve(); }
   add(fn) { this.p = this.p.then(fn).catch(console.error); }
 }
-`;
+`
 }

@@ -1,4 +1,8 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
 body {
   display: flex;
@@ -51,9 +55,16 @@ body {
   scrollbar-color: #333 transparent;
 }
 
-#sessions::-webkit-scrollbar { width: 6px; }
-#sessions::-webkit-scrollbar-track { background: transparent; }
-#sessions::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+#sessions::-webkit-scrollbar {
+  width: 6px;
+}
+#sessions::-webkit-scrollbar-track {
+  background: transparent;
+}
+#sessions::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
 
 #sessions li {
   padding: 10px 14px;
@@ -66,7 +77,9 @@ body {
   font-size: 13px;
 }
 
-#sessions li:hover { background: #1a1a1a; }
+#sessions li:hover {
+  background: #1a1a1a;
+}
 
 #sessions li.active {
   background: #1f1f2e;
@@ -81,9 +94,16 @@ body {
   flex-shrink: 0;
 }
 
-.session-status.running { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
-.session-status.exited { background: #6b7280; }
-.session-status.error { background: #ef4444; }
+.session-status.running {
+  background: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+}
+.session-status.exited {
+  background: #6b7280;
+}
+.session-status.error {
+  background: #ef4444;
+}
 
 .session-label {
   flex: 1;
@@ -102,7 +122,10 @@ body {
   border-radius: 3px;
 }
 
-.close-btn:hover { color: #ef4444; background: rgba(239, 68, 68, 0.1); }
+.close-btn:hover {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
 
 #enc-status {
   font-size: 12px;
@@ -115,7 +138,9 @@ body {
   gap: 6px;
 }
 
-#enc-status.secure { color: #22c55e; }
+#enc-status.secure {
+  color: #22c55e;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════
    MAIN TERMINAL AREA
@@ -134,7 +159,10 @@ body {
   inset: 0;
 }
 
-.term-wrapper.active { display: flex; flex-direction: column; }
+.term-wrapper.active {
+  display: flex;
+  flex-direction: column;
+}
 
 .term-canvas-container {
   flex: 1;
@@ -174,9 +202,18 @@ body {
   user-select: none;
 }
 
-.term-statusbar .left { flex: 1; display: flex; gap: 12px; }
-.term-statusbar .right { display: flex; gap: 12px; }
-.term-statusbar .dim { opacity: 0.6; }
+.term-statusbar .left {
+  flex: 1;
+  display: flex;
+  gap: 12px;
+}
+.term-statusbar .right {
+  display: flex;
+  gap: 12px;
+}
+.term-statusbar .dim {
+  opacity: 0.6;
+}
 
 /* Buttons */
 button.btn {
@@ -191,8 +228,13 @@ button.btn {
   transition: 0.15s;
 }
 
-button.btn:hover { background: #2a2a2a; border-color: #444; }
-button.btn:active { background: #1a1a1a; }
+button.btn:hover {
+  background: #2a2a2a;
+  border-color: #444;
+}
+button.btn:active {
+  background: #1a1a1a;
+}
 
 /* Context menu */
 #context-menu {
@@ -202,12 +244,14 @@ button.btn:active { background: #1a1a1a; }
   border-radius: 6px;
   padding: 4px 0;
   min-width: 150px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   z-index: 1000;
   display: none;
 }
 
-#context-menu.visible { display: block; }
+#context-menu.visible {
+  display: block;
+}
 
 #context-menu .item {
   padding: 8px 16px;
@@ -218,8 +262,13 @@ button.btn:active { background: #1a1a1a; }
   gap: 24px;
 }
 
-#context-menu .item:hover { background: #2a2a2a; }
-#context-menu .item .shortcut { color: #555; font-size: 11px; }
+#context-menu .item:hover {
+  background: #2a2a2a;
+}
+#context-menu .item .shortcut {
+  color: #555;
+  font-size: 11px;
+}
 
 /* Scrollbar for scrollback */
 .scrollbar {
@@ -273,7 +322,9 @@ button.btn:active { background: #1a1a1a; }
   border-radius: 16px;
   padding: 36px 40px;
   text-align: center;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6), 0 0 40px rgba(167, 139, 250, 0.08);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.6),
+    0 0 40px rgba(167, 139, 250, 0.08);
   max-width: 380px;
   width: 90%;
 }
@@ -343,11 +394,19 @@ button.btn:active { background: #1a1a1a; }
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes fadeOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
