@@ -17,6 +17,8 @@
     "build:binaries": "bun run scripts/build-binaries.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
@@ -49,7 +51,11 @@
     "CHANGELOG.md"
   ],
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/bun": "latest",
+    "eslint": "^10.1.0",
+    "prettier": "^3.8.1",
+    "typescript-eslint": "^8.57.1",
     "vitepress": "^1.6.4"
   }
 }

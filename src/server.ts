@@ -373,7 +373,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
                 });
             },
 
-            close(ws, code, reason) {
+            close(ws, _code, _reason) {
                 const sessionData = ws.data as unknown as SessionData;
                 if (sessionData.authTimer) clearTimeout(sessionData.authTimer);
 
@@ -420,7 +420,7 @@ function handleDataMessage(
     sessionData: SessionData,
     msgBuffer: ArrayBuffer,
     baseKey: CryptoKey | null,
-    config: ServerConfig
+    _config: ServerConfig
 ) {
     const sessionKey = (sessionData as any)._sessionKey || baseKey;
 
