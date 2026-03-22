@@ -150,3 +150,37 @@ Shellport does not use environment variables for configuration. All settings are
 - The binary is self-contained at runtime (no node_modules)
 - NanoTermV2 is a standalone library that can be used independently
 - Tailscale integration requires Tailscale CLI on the system
+
+## Incident Response
+
+### Security Incidents
+
+If a security vulnerability is discovered:
+
+1. **Do not** commit secrets or credentials to the repository
+2. **Report** the issue via GitHub Security Advisories
+3. **Rotate** any exposed secrets immediately
+4. **Document** the vulnerability and remediation steps
+
+### Common Issues
+
+#### Binary fails to start
+- Verify Bun runtime version >= 1.0.0
+- Check port 7681 is not already in use
+- Ensure Tailscale CLI is installed if using `--tailscale` flag
+
+#### TOTP authentication failing
+- Verify system clock is synchronized
+- Use `--totp-reset` to regenerate pairing secret
+- Check `~/.shellport-totp-secret` file permissions
+
+#### WebSocket connection refused
+- Verify server is running (`bun run dev`)
+- Check firewall settings for port 7681
+- Use `--dev` flag for localhost development
+
+### Recovery Procedures
+
+1. **Binary crashes**: Restart with `bun run dev` or rebuild with `bun run build`
+2. **TOTP locked out**: Use `--totp-reset` flag to re-pair authenticator
+3. **Port conflicts**: Use `--port <n>` to specify alternative port

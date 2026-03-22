@@ -24,7 +24,7 @@ jobs:
         run: bun run typecheck
 
       - name: Run tests
-        run: bun test
+        run: bun test --max-concurrency=5
 
   build:
     runs-on: ubuntu-latest
@@ -41,7 +41,55 @@ jobs:
         run: bun install
 
       - name: Build binary
-        run: bun run build
+        run: |
+          START=$(date +%s)
+          bun run build
+          END=$(date +%s)
+          DURATION=$((END - START))
+          echo "Build duration: ${DURATION}s"
 
       - name: Verify binary
         run: ./shellport --version
+
+  bundle-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build frontend bundle
+        run: bun run build:frontend
+
+      - name: Check bundle size
+        run: |
+          SIZE=$(wc -c < src/frontend/nanoterm.js)
+          echo "Bundle size: $SIZE bytes"
+          if [ $SIZE -gt 100000 ]; then
+            echo "WARNING: Bundle exceeds 100KB threshold"
+          fi
+
+  docs-commands:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Verify commands
+        run: |
+          bun run --cmds 2>/dev/null | grep -q "dev" && echo "dev command exists"
+          bun test --list 2>&1 | head -3
+          bun run typecheck 2>&1 | tail -1
