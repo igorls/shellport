@@ -93,3 +93,22 @@ jobs:
           bun run --cmds 2>/dev/null | grep -q "dev" && echo "dev command exists"
           bun test --list 2>&1 | head -3
           bun run typecheck 2>&1 | tail -1
+
+  duplicate-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Detect duplicate code
+        run: bun run duplicates
+        env:
+          # Threshold: 3% max duplicated lines allowed
+          JSCPD_THRESHOLD: 3
