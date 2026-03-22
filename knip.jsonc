@@ -1,0 +1,7 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nrwl/knip/main/schema.jsonc",
+  "entry": ["src/index.ts"],
+  "project": ["src/**/*.ts"],
+  "ignoreDependencies": ["@types/bun", "lint-staged"],
+  "ignoreFiles": ["src/**/*.test.ts"]
+}

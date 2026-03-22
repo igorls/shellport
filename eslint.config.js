@@ -49,6 +49,7 @@ export default tseslint.config(
       ],
       'no-console': 'off',
       'no-control-regex': 'off',
+      complexity: ['warn', { max: 20 }],
     },
   },
   {
