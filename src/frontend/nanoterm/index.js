@@ -205,13 +205,16 @@ class NanoTermV2 {
   }
 
   _switchRenderer(newRenderer) {
-    const oldCanvas = this.renderer.canvas
+    if (this._isDestroyed || !this.renderer) return
+
+    // Don't log oldCanvas if we don't use it, just properly destroy
     this.renderer.destroy()
     this.renderer = newRenderer
     this.canvas = newRenderer.canvas
+
+    // Hot-swap reinitialization
     this.measureChar()
     this.resize()
-    // Re-bind event listeners on the new canvas
     this.setupEvents()
     this.startCursorBlink()
   }
@@ -1237,6 +1240,10 @@ class NanoTermV2 {
   // -------------------------------------------------------------------------
 
   setupEvents() {
+    if (this._resizeObserver) {
+      this._resizeObserver.disconnect()
+    }
+
     this.canvas.addEventListener('keydown', (e) => this.onKeyDown(e))
     this.canvas.addEventListener('keypress', (e) => this.onKeyPress(e))
 
