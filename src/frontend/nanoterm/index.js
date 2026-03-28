@@ -13,6 +13,7 @@ import {
   ATTR,
   XTERM_256_RGBA,
   rgbPack,
+  DEC_SPECIAL_GRAPHICS,
 } from './constants.js'
 import { CanvasRenderer } from './canvas-renderer.js'
 import { WebGLRenderer } from './webgl-renderer.js'
@@ -308,13 +309,26 @@ class NanoTermV2 {
     this.measureChar()
 
     const rect = this.container.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return // Prevent 1x1 scale when hidden
 
     const pad = this.options.padding
 
     const oldCols = this.cols
     const oldRows = this.rows
+    const dpr = window.devicePixelRatio || 1
+
     this.cols = Math.max(1, Math.floor((rect.width - pad * 2) / this.charWidth))
     this.rows = Math.max(1, Math.floor((rect.height - pad * 2) / this.charHeight))
+
+    if (
+      this.cols === oldCols &&
+      this.rows === oldRows &&
+      this.canvas.width === rect.width * dpr &&
+      this.canvas.height === rect.height * dpr
+    ) {
+      return // No dimension changes, skip expensive rebuild
+    }
+
     this.scrollBottom = 0
 
     this.renderer.resizeCanvas(rect)
