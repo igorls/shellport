@@ -132,6 +132,7 @@ class NanoTermV2 {
 
     // Rendering
     this.renderPending = false
+    this.renderFallbackTimer = null
     this._isDestroyed = false
 
     // Resize debounce
@@ -159,11 +160,12 @@ class NanoTermV2 {
         .load(fontSpec)
         .then(() => {
           if (this._isDestroyed) return // Prevent updating dead terminals
-          this.measureChar()
+          this.measureChar(true)
           // Always resize after font load — even if charWidth didn't change,
           // data rendered with fallback font metrics needs to be repainted.
           // Bypass the debounce: this is a one-time correction, not a drag-resize.
           this.resize()
+          this.triggerRender()
           if (this.onResize) {
             clearTimeout(this._resizeDebounceTimer)
             this.onResize(this.cols, this.rows)
@@ -181,8 +183,10 @@ class NanoTermV2 {
 
   _createRenderer(container) {
     const mode = this.options.renderer
+    const platform = navigator.userAgentData?.platform || navigator.platform || ''
+    const isWindows = /win/i.test(platform)
 
-    if (mode === 'webgl' || mode === 'auto') {
+    if (mode === 'webgl' || (mode === 'auto' && !isWindows)) {
       try {
         const renderer = new WebGLRenderer(container, this.options, this.colors)
         // Listen for context lost — auto-fallback to Canvas2D
@@ -224,8 +228,8 @@ class NanoTermV2 {
   // Initialization Helpers
   // -------------------------------------------------------------------------
 
-  measureChar() {
-    this.renderer.measureChar()
+  measureChar(forceAtlasReset = false) {
+    this.renderer.measureChar(forceAtlasReset)
     this.charWidth = this.renderer.charWidth
     this.charHeight = this.renderer.charHeight
   }
@@ -326,6 +330,7 @@ class NanoTermV2 {
       this.canvas.width === rect.width * dpr &&
       this.canvas.height === rect.height * dpr
     ) {
+      this.triggerRender()
       return // No dimension changes, skip expensive rebuild
     }
 
@@ -1221,15 +1226,31 @@ class NanoTermV2 {
   // -------------------------------------------------------------------------
 
   triggerRender() {
-    if (!this.renderPending && !this._isDestroyed) {
+    if (this._isDestroyed) return
+
+    if (this.renderFallbackTimer) clearTimeout(this.renderFallbackTimer)
+    this.renderFallbackTimer = setTimeout(() => {
+      this.renderFallbackTimer = null
+      if (this.renderPending && !this._isDestroyed) this.render()
+    }, 50)
+
+    if (!this.renderPending) {
       this.renderPending = true
       requestAnimationFrame(() => {
+        if (this.renderFallbackTimer) {
+          clearTimeout(this.renderFallbackTimer)
+          this.renderFallbackTimer = null
+        }
         if (!this._isDestroyed) this.render()
       })
     }
   }
 
   render() {
+    if (this.renderFallbackTimer) {
+      clearTimeout(this.renderFallbackTimer)
+      this.renderFallbackTimer = null
+    }
     this.renderPending = false
     this.renderer.render(this)
   }
@@ -1657,6 +1678,10 @@ class NanoTermV2 {
 
   destroy() {
     this._isDestroyed = true
+    if (this.renderFallbackTimer) {
+      clearTimeout(this.renderFallbackTimer)
+      this.renderFallbackTimer = null
+    }
     this.stopCursorBlink()
     if (this._resizeObserver) {
       this._resizeObserver.disconnect()

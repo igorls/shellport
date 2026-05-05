@@ -461,6 +461,7 @@ export class WebGLRenderer {
     this._atlasCanvas = null
     this._atlasCtx = null
     this._atlasSlotsPerRow = 0
+    this._lastFontSpec = null
 
     // WebGL state
     this.gl = null
@@ -605,18 +606,33 @@ export class WebGLRenderer {
 
   // ── Font Measurement (CPU-side, identical to CanvasRenderer) ─────────────
 
-  measureChar() {
+  measureChar(forceAtlasReset = false) {
     const testCanvas = document.createElement('canvas')
     const testCtx = testCanvas.getContext('2d')
     const fontSize = this.options.fontSize
-    testCtx.font = `${fontSize}px ${this.options.fontFamily}`
+    const fontSpec = `${fontSize}px ${this.options.fontFamily}`
+    testCtx.font = fontSpec
     const m = testCtx.measureText('W')
-    this.charWidth = Math.ceil(m.width)
+    const nextCharWidth = Math.ceil(m.width)
     const lineHeight = this.options.lineHeight || 1.15
-    this.charHeight = Math.ceil(fontSize * lineHeight)
+    const nextCharHeight = Math.ceil(fontSize * lineHeight)
 
-    // Invalidate atlas on font change
-    this._resetAtlas()
+    const fontChanged =
+      forceAtlasReset ||
+      this._lastFontSpec !== fontSpec ||
+      this.charWidth !== nextCharWidth ||
+      this.charHeight !== nextCharHeight
+
+    this.charWidth = nextCharWidth
+    this.charHeight = nextCharHeight
+    this._lastFontSpec = fontSpec
+
+    if (fontChanged) {
+      // Invalidate atlas on font change. Plain resize probes with unchanged
+      // metrics must not clear the atlas, or the existing framebuffer goes
+      // blank until another write happens.
+      this._resetAtlas()
+    }
 
     // Probe PUA glyphs
     this._tofuData = null
@@ -826,7 +842,9 @@ export class WebGLRenderer {
 
     // ── Process atlas for all visible glyphs (BEFORE texture upload) ──
     // This fills gridData[i*4+3] with atlas indices
+    const atlasSizeBefore = this._atlasMap.size
     this._updateAtlasForGrid(gridData, visibleCols, visibleRows)
+    const atlasChanged = this._atlasMap.size !== atlasSizeBefore
 
     // ── Upload grid data texture (now includes atlas indices) ──
     gl.activeTexture(gl.TEXTURE0)
@@ -934,6 +952,10 @@ export class WebGLRenderer {
     gl.bindVertexArray(this._vao)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     gl.bindVertexArray(null)
+
+    if (atlasChanged && typeof term.triggerRender === 'function') {
+      term.triggerRender()
+    }
   }
 
   // ── Build Visible Grid ──────────────────────────────────────────────────
