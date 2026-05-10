@@ -23,6 +23,31 @@ shellport server
 
 Then open the URL printed in your terminal. That's it.
 
+## Run a custom command
+
+By default ShellPort spawns the operator's `$SHELL` (whitelisted via `SAFE_SHELLS`). Pass `--` followed by an executable and its arguments to run a specific command instead:
+
+```bash
+shellport server --port 7681 --no-totp --no-secret --dev -- bun run my-tui.ts
+```
+
+When `--cmd`-style argv is provided, the `SAFE_SHELLS` check is bypassed — the operator chose the command. Useful for embedding a single-purpose CLI behind a web terminal, for visual e2e testing of TUIs, or for shipping a lightweight "share this script" gateway.
+
+## Test / debug API
+
+For programmatic introspection of the rendered terminal — useful for visual e2e tests, agent-driven UIs, or automation — append `?test=1` (or `#test=1`) to the page URL. ShellPort then exposes `window.shellport` with:
+
+| Method | Purpose |
+|---|---|
+| `shellport.size()` | `{ cols, rows }` of the active terminal |
+| `shellport.cursor()` | `{ x, y, visible }` |
+| `shellport.dumpRow(y)` | text content of row `y` (right-trimmed) |
+| `shellport.dumpGrid()` | full JSON dump: `{ cols, rows, cursor, altScreen, lines, cells[] }` where each cell has `{ char, fg, bg, bold, dim, italic, underline, inverse, strike }` |
+| `shellport.send(text)` | send bytes to the PTY (bypasses DOM keystrokes) |
+| `shellport.sessions()`, `activeSessionId()` | for multi-tab introspection |
+
+The flag is fully opt-in: in production deployments without `?test=1`, no API is exposed and `window.shellport` is `undefined`.
+
 ## Why ShellPort?
 
 Most web terminal tools either force you to haul in xterm.js + a Node.js runtime, or sacrifice encryption entirely. ShellPort takes a different approach:

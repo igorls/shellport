@@ -31,6 +31,8 @@ export interface ParsedArgs {
   quiet: boolean
   totp: boolean
   totpReset: boolean
+  /** Command to spawn instead of $SHELL — everything after `--` on the CLI */
+  cmd: readonly string[]
 }
 
 /** Parse CLI arguments into a structured object. */
@@ -46,9 +48,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let quiet = false
   let totp = true
   let totpReset = false
+  let cmd: string[] = []
 
   for (let i = 1; i < argv.length; i++) {
-    if (argv[i] === '--port' || argv[i] === '-p') {
+    if (argv[i] === '--') {
+      cmd = argv.slice(i + 1)
+      break
+    } else if (argv[i] === '--port' || argv[i] === '-p') {
       port = parseInt(argv[++i], 10)
     } else if (argv[i] === '--secret' || argv[i] === '-s') {
       secret = argv[++i]
@@ -83,6 +89,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     quiet,
     totp,
     totpReset,
+    cmd,
   }
 }
 
@@ -154,6 +161,7 @@ if (parsed.command === 'server' || parsed.command === 'serve') {
     allowLocalhost: parsed.allowLocalhost,
     totp: parsed.totp,
     totpSecret,
+    cmd: parsed.cmd.length > 0 ? parsed.cmd : undefined,
   })
 } else if (parsed.command === 'client' || parsed.command === 'connect') {
   connectClient({ url: parsed.url, secret: parsed.secret })

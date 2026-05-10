@@ -18,6 +18,13 @@ import {
 import { CanvasRenderer } from './canvas-renderer.js'
 import { WebGLRenderer } from './webgl-renderer.js'
 
+function rgbaHex(rgba) {
+  const r = (rgba >>> 24) & 0xff
+  const g = (rgba >>> 16) & 0xff
+  const b = (rgba >>> 8) & 0xff
+  return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')
+}
+
 class NanoTermV2 {
   constructor(container, sendFn, options = {}) {
     this.container = container
@@ -301,6 +308,60 @@ class NanoTermV2 {
     const row = new Uint32Array(rowWords)
     row.set(this.grid.subarray(offset, offset + rowWords))
     return row
+  }
+
+  // -------------------------------------------------------------------------
+  // Test/Debug Introspection — JSON-serializable cell-grid dumps
+  // -------------------------------------------------------------------------
+
+  dumpRow(y) {
+    if (!this.grid || y < 0 || y >= this.rows) return ''
+    const rowOff = y * this.cols * CELL_WORDS
+    let s = ''
+    let trailingSpaceStart = -1
+    for (let x = 0; x < this.cols; x++) {
+      const cp = this.grid[rowOff + x * CELL_WORDS] >>> CELL_CP_SHIFT
+      const ch = cp === 0 ? ' ' : String.fromCodePoint(cp)
+      s += ch
+      if (ch !== ' ') trailingSpaceStart = -1
+      else if (trailingSpaceStart < 0) trailingSpaceStart = x
+    }
+    return trailingSpaceStart >= 0 ? s.slice(0, trailingSpaceStart) : s
+  }
+
+  dumpGrid() {
+    if (!this.grid) return null
+    const total = this.cols * this.rows
+    const cells = new Array(total)
+    for (let i = 0; i < total; i++) {
+      const off = i * CELL_WORDS
+      const word0 = this.grid[off]
+      const cp = word0 >>> CELL_CP_SHIFT
+      const flags = word0 & CELL_FLAGS_MASK
+      const fg = this.grid[off + 1] >>> 0
+      const bg = this.grid[off + 2] >>> 0
+      cells[i] = {
+        char: cp === 0 ? '' : String.fromCodePoint(cp),
+        fg: fg === COLOR_DEFAULT ? null : rgbaHex(fg),
+        bg: bg === COLOR_DEFAULT ? null : rgbaHex(bg),
+        bold: !!(flags & ATTR.BOLD),
+        dim: !!(flags & ATTR.DIM),
+        italic: !!(flags & ATTR.ITALIC),
+        underline: !!(flags & ATTR.UNDERLINE),
+        inverse: !!(flags & ATTR.INVERSE),
+        strike: !!(flags & ATTR.STRIKETHROUGH),
+      }
+    }
+    const rows = []
+    for (let y = 0; y < this.rows; y++) rows.push(this.dumpRow(y))
+    return {
+      cols: this.cols,
+      rows: this.rows,
+      cursor: { x: this.cursorX, y: this.cursorY, visible: this.cursorVisible },
+      altScreen: this.useAlternate,
+      lines: rows,
+      cells,
+    }
   }
 
   // -------------------------------------------------------------------------

@@ -9,6 +9,53 @@ let sessionCount = 0
 const activeSessions = new Map()
 let currentSessionId = null
 
+// ─── Test/Debug API ─────────────────────────────────────────────────────
+// Exposes window.shellport with cell-grid introspection and programmatic
+// input. Opt-in via URL: append `?test=1` or `#test=1` to the page URL.
+// Disabled by default — production deployments are unaffected.
+const TEST_MODE = location.search.includes('test=1') || location.hash.includes('test=1')
+
+if (TEST_MODE) {
+  const currentTerm = () => {
+    const session = activeSessions.get(currentSessionId)
+    return session ? session.term : null
+  }
+  globalThis.shellport = {
+    get term() {
+      return currentTerm()
+    },
+    dumpGrid() {
+      const term = currentTerm()
+      return term ? term.dumpGrid() : null
+    },
+    dumpRow(y) {
+      const term = currentTerm()
+      return term ? term.dumpRow(y) : ''
+    },
+    send(text) {
+      const term = currentTerm()
+      if (!term) return false
+      term.send(text)
+      return true
+    },
+    size() {
+      const term = currentTerm()
+      return term ? { cols: term.cols, rows: term.rows } : null
+    },
+    cursor() {
+      const term = currentTerm()
+      return term ? { x: term.cursorX, y: term.cursorY, visible: term.cursorVisible } : null
+    },
+    sessions() {
+      return Array.from(activeSessions.keys())
+    },
+    activeSessionId() {
+      return currentSessionId
+    },
+  }
+  console.info('[shellport] test API exposed at window.shellport')
+}
+
 // TOTP frame types (must match server)
 const FT_TOTP_CHALLENGE = 6
 const FT_TOTP_RESPONSE = 7

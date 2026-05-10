@@ -58,7 +58,7 @@ export async function buildHTML(cryptoJS: string): Promise<string> {
 
   return template
     .replace('{{STYLES}}', styles)
-    .replace('{{CRYPTO_JS}}', cryptoJS)
-    .replace('{{NANOTERM_JS}}', nanoterm)
-    .replace('{{APP_JS}}', app)
+    .replace('/*__CRYPTO_JS__*/', () => cryptoJS)
+    .replace('/*__NANOTERM_JS__*/', () => nanoterm)
+    .replace('/*__APP_JS__*/', () => app)
 }

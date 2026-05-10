@@ -56,6 +56,13 @@ export interface ServerConfig {
   totp: boolean
   /** TOTP secret (Base32 encoded) */
   totpSecret?: string
+  /**
+   * Command to spawn in each PTY instead of the user's $SHELL.
+   * First element is the executable, the rest are arguments.
+   * When set, the SAFE_SHELLS check is bypassed — the operator is responsible
+   * for the chosen command.
+   */
+  cmd?: readonly string[]
 }
 
 /** Client configuration */

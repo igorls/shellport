@@ -287,7 +287,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
           // No encryption, no TOTP, no approval — plaintext mode
           sessionData.authenticated = true
           incrementSessions()
-          spawnPTY(ws, sessionData, null, safeEnv, () => decrementSessions())
+          spawnPTY(ws, sessionData, null, safeEnv, config.cmd, () => decrementSessions())
           return
         } else if (!baseKey && config.totp && config.totpSecret) {
           // No encryption, but TOTP required — send challenge immediately
@@ -344,7 +344,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
               if (sessionData.authTimer) clearTimeout(sessionData.authTimer)
               incrementSessions()
               const sessionKey = (sessionData as any)._sessionKey || null
-              spawnPTY(ws, sessionData, sessionKey, safeEnv, () => decrementSessions())
+              spawnPTY(ws, sessionData, sessionKey, safeEnv, config.cmd, () => decrementSessions())
             }
           })
           return
@@ -398,7 +398,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
             if (sessionData.authTimer) clearTimeout(sessionData.authTimer)
             incrementSessions()
-            spawnPTY(ws, sessionData, sessionKey, safeEnv, () => decrementSessions())
+            spawnPTY(ws, sessionData, sessionKey, safeEnv, config.cmd, () => decrementSessions())
             return
           }
 
@@ -415,7 +415,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
           }
 
           incrementSessions()
-          spawnPTY(ws, sessionData, null, safeEnv, () => decrementSessions())
+          spawnPTY(ws, sessionData, null, safeEnv, config.cmd, () => decrementSessions())
         })
       },
 
@@ -526,18 +526,26 @@ function spawnPTY(
   sessionData: SessionData,
   cryptoKey: CryptoKey | null,
   env: Record<string, string>,
+  cmd: readonly string[] | undefined,
   onClose: () => void
 ) {
   console.log(`[ShellPort] New PTY session allocated for ${sessionData.clientIP || 'unknown'}.`)
   try {
-    const shell = process.env.SHELL || 'bash'
-    if (!SAFE_SHELLS.includes(shell)) {
-      console.error(`[ShellPort] Rejected unsafe shell: ${shell}`)
-      onClose()
-      ws.close(1011, 'Unsupported shell')
-      return
+    let argv: string[]
+    if (cmd && cmd.length > 0) {
+      argv = [...cmd]
+    } else {
+      const shell = process.env.SHELL || 'bash'
+      if (!SAFE_SHELLS.includes(shell)) {
+        console.error(`[ShellPort] Rejected unsafe shell: ${shell}`)
+        onClose()
+        ws.close(1011, 'Unsupported shell')
+        return
+      }
+      argv = [shell]
     }
-    const proc = spawn([shell], {
+
+    const proc = spawn(argv, {
       env,
       terminal: {
         cols: 80,
