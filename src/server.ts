@@ -14,6 +14,7 @@
  */
 
 import { spawn, spawnSync } from 'bun'
+import { spawnPty } from './pty.js'
 import {
   deriveKey,
   pack,
@@ -428,7 +429,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         }
 
         const proc = sessionData.proc
-        if (proc && !proc.killed) {
+        if (proc) {
           try {
             proc.kill()
           } catch {
@@ -472,7 +473,7 @@ function handleDataMessage(
 
   sessionData.recvQ.add(async () => {
     const proc = sessionData.proc
-    if (!proc || !proc.terminal) return
+    if (!proc) return
 
     const decoded = await unpack(sessionKey, msgBuffer)
     if (!decoded) {
@@ -481,7 +482,7 @@ function handleDataMessage(
     }
 
     if (decoded.type === FrameType.DATA) {
-      sessionData.proc?.terminal?.write(decoded.payload)
+      sessionData.proc?.write(decoded.payload)
     } else if (decoded.type === FrameType.CONTROL) {
       try {
         const payloadStr = new TextDecoder().decode(decoded.payload)
@@ -492,7 +493,7 @@ function handleDataMessage(
         if (ctl.type === 'resize') {
           const cols = Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(Number(ctl.cols)) || 80))
           const rows = Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(Number(ctl.rows)) || 24))
-          sessionData.proc?.terminal?.resize(cols, rows)
+          sessionData.proc?.resize(cols, rows)
         }
       } catch {
         // Malformed control message — ignore
@@ -545,19 +546,17 @@ function spawnPTY(
       argv = [shell]
     }
 
-    const proc = spawn(argv, {
+    const proc = spawnPty(argv, {
       env,
-      terminal: {
-        cols: 80,
-        rows: 24,
-        data(_term: unknown, data: Uint8Array) {
-          sessionData.sendQ.add(async () => {
-            if (ws.readyState === 1) {
-              const sanitized = sanitizePTYData(data)
-              ws.send(await pack(cryptoKey, FrameType.DATA, sanitized))
-            }
-          })
-        },
+      cols: 80,
+      rows: 24,
+      onData(data): void {
+        sessionData.sendQ.add(async () => {
+          if (ws.readyState === 1) {
+            const sanitized = sanitizePTYData(data)
+            ws.send(await pack(cryptoKey, FrameType.DATA, sanitized))
+          }
+        })
       },
     })
 

@@ -42,6 +42,7 @@ class NanoTermV2 {
       padding: options.padding ?? 6,
       lineHeight: options.lineHeight || 0,
       renderer: options.renderer || 'auto', // 'auto' | 'canvas' | 'webgl'
+      autoFocus: options.autoFocus !== false,
     }
 
     // Theme colors
@@ -156,7 +157,7 @@ class NanoTermV2 {
     this.resetTerminal()
     this.setupEvents()
     this.startCursorBlink()
-    this.canvas.focus()
+    if (this.options.autoFocus) this.canvas.focus()
 
     // Explicitly load the specified font and re-measure once available.
     // document.fonts.ready resolves immediately if no fonts are loading,
@@ -424,6 +425,16 @@ class NanoTermV2 {
     }
 
     this.triggerRender()
+  }
+
+  /** Resize the host element so the terminal has an exact cell grid. */
+  resizeToGrid(cols, rows) {
+    const targetCols = Math.max(1, Math.floor(Number(cols) || 1))
+    const targetRows = Math.max(1, Math.floor(Number(rows) || 1))
+    const pad = this.options.padding * 2
+    this.container.style.width = this.charWidth * targetCols + pad + 'px'
+    this.container.style.height = this.charHeight * targetRows + pad + 'px'
+    this.resize()
   }
 
   resizeGrid(oldGrid, oldCols, oldRows, isPrimary) {

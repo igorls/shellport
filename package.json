@@ -2,13 +2,38 @@
   "name": "shellport",
   "version": "0.2.0",
   "description": "Zero-dependency encrypted terminal bridge with TOTP 2FA and built-in web UI. Share your shell over the network with E2E encryption, powered by Bun.",
-  "type": "module",
+  "keywords": [
+    "2fa",
+    "authenticator",
+    "bun",
+    "canvas",
+    "encryption",
+    "pty",
+    "remote",
+    "shell",
+    "terminal",
+    "totp",
+    "vt100",
+    "websocket",
+    "xterm",
+    "zero-dependency"
+  ],
+  "license": "MIT",
+  "author": "",
   "bin": {
     "shellport": "./src/index.ts"
   },
+  "files": [
+    "src/**/*",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./nanoterm": "./src/frontend/nanoterm/index.js"
+    "./nanoterm": "./src/frontend/nanoterm/index.js",
+    "./pty": "./src/pty.ts"
   },
   "scripts": {
     "dev": "bun run src/index.ts server --dev",
@@ -28,33 +53,6 @@
     "docs:preview": "vitepress preview docs",
     "prepare": "husky"
   },
-  "keywords": [
-    "terminal",
-    "pty",
-    "websocket",
-    "encryption",
-    "totp",
-    "2fa",
-    "authenticator",
-    "shell",
-    "remote",
-    "bun",
-    "zero-dependency",
-    "canvas",
-    "vt100",
-    "xterm"
-  ],
-  "author": "",
-  "license": "MIT",
-  "engines": {
-    "bun": ">=1.0.0"
-  },
-  "files": [
-    "src/**/*",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
-  ],
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/bun": "latest",
@@ -78,5 +76,8 @@
     "*.json": [
       "prettier --write"
     ]
+  },
+  "engines": {
+    "bun": ">=1.0.0"
   }
 }

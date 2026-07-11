@@ -96,9 +96,9 @@ export async function connectClient(config: ClientConfig): Promise<void> {
     sendQ.add(async () => {
       if (ws.readyState === 1) {
         if (type === FrameType.CLIENT_NONCE || !cryptoKey) {
-          ws.send(await pack(null, type, payload))
+          ws.send(toWebSocketPayload(await pack(null, type, payload)))
         } else {
-          ws.send(await pack(cryptoKey, type, payload))
+          ws.send(toWebSocketPayload(await pack(cryptoKey, type, payload)))
         }
       }
     })
@@ -231,4 +231,11 @@ export async function connectClient(config: ClientConfig): Promise<void> {
 
   process.on('SIGINT', () => {})
   process.on('exit', () => isTTY && process.stdin.setRawMode(false))
+}
+
+/** Copy bytes onto an ArrayBuffer acceptable to the DOM WebSocket interface. */
+export function toWebSocketPayload(data: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(data.byteLength)
+  copy.set(data)
+  return copy.buffer
 }

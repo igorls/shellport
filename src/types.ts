@@ -2,6 +2,8 @@
  * ShellPort - Types & Constants
  */
 
+import type { PtySession } from './pty.js'
+
 /** Frame types for the wire protocol */
 export const FrameType = {
   /** Terminal data (stdin/stdout) */
@@ -75,7 +77,7 @@ export interface ClientConfig {
 export interface SessionData {
   sendQ: SeqQueue
   recvQ: SeqQueue
-  proc: ReturnType<typeof import('bun').spawn> | null
+  proc: PtySession | null
   /** Whether the client has proven knowledge of the encryption key */
   authenticated: boolean
   /** Timer for auth timeout (cleared on successful auth) */
