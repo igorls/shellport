@@ -25,7 +25,7 @@ function rgbaHex(rgba) {
   return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')
 }
 
-class NanoTermV2 {
+export class NanoTermV2 {
   constructor(container, sendFn, options = {}) {
     this.container = container
     this.send = sendFn
@@ -126,6 +126,13 @@ class NanoTermV2 {
 
     // Bracketed paste
     this.bracketedPaste = false
+
+    // Kitty keyboard protocol state is screen-local. Full support is needed
+    // for TUIs to distinguish combinations such as Shift+Enter from Enter.
+    this.primaryKeyboardFlags = 0
+    this.alternateKeyboardFlags = 0
+    this.primaryKeyboardStack = []
+    this.alternateKeyboardStack = []
 
     // Pending wrap state (VT100 phantom column / DECAWM)
     this.wrapPending = false
@@ -254,6 +261,10 @@ class NanoTermV2 {
     this.scrollTop = 0
     this.scrollBottom = 0
     this.useAlternate = false
+    this.primaryKeyboardFlags = 0
+    this.alternateKeyboardFlags = 0
+    this.primaryKeyboardStack = []
+    this.alternateKeyboardStack = []
     this.scrollbackBuffer = []
     this.scrollbackOffset = 0
     this.selection = null
@@ -533,6 +544,9 @@ class NanoTermV2 {
       case 'dcs':
         this.processDCS(c, code)
         break
+      case 'ignored-string':
+        this.processIgnoredString(c, code)
+        break
       case 'charset':
         // ESC ( X or ESC ) X — select character set
         if (this.parseIntermediates === '(') this.charsetG0 = c
@@ -582,6 +596,12 @@ class NanoTermV2 {
     } else if (c === 'P') {
       this.parseState = 'dcs'
       this.dcsBuffer = ''
+    } else if (c === '_' || c === '^' || c === 'X') {
+      // APC (including Kitty graphics), PM and SOS are string controls. They
+      // may carry arbitrary printable bytes but end only at ST (ESC \\).
+      // Unsupported protocols must be consumed, never painted as text.
+      this.parseState = 'ignored-string'
+      this.parseIntermediates = ''
     } else if (c === 'M') {
       this.reverseIndex()
       this.parseState = 'ground'
@@ -664,6 +684,21 @@ class NanoTermV2 {
       if (this.dcsBuffer.length < MAX_SEQUENCE_SIZE) {
         this.dcsBuffer += c
       }
+    }
+  }
+
+  processIgnoredString(c, code) {
+    if (this.parseIntermediates === '\\') {
+      if (c === '\\') {
+        this.parseState = 'ground'
+        this.parseIntermediates = ''
+        return
+      }
+      this.parseIntermediates = ''
+    }
+
+    if (code === 0x1b) {
+      this.parseIntermediates = '\\'
     }
   }
 
@@ -750,9 +785,20 @@ class NanoTermV2 {
         this.savedCursorY = this.cursorY
         break
       case 'u':
-        this.cursorX = this.savedCursorX
-        this.cursorY = this.savedCursorY
-        this.wrapPending = false
+        if (
+          intermediates === '?' ||
+          intermediates === '=' ||
+          intermediates === '>' ||
+          intermediates === '<'
+        ) {
+          this.executeKeyboardProtocol(p, intermediates)
+        } else {
+          // ANSI SCORC (CSI u) remains available when no Kitty keyboard
+          // protocol prefix is present.
+          this.cursorX = this.savedCursorX
+          this.cursorY = this.savedCursorY
+          this.wrapPending = false
+        }
         break
       case 'S':
         this.scrollUp(p[0] || 1)
@@ -806,6 +852,13 @@ class NanoTermV2 {
 
   processSGR(params) {
     if (params.length === 0) params = [0]
+
+    // Claude Code's TUI emits 4;2 as a compatibility form for faint text.
+    // Treating the leading 4 as an independent ECMA-48 underline makes the
+    // entire alternate-screen UI stay underlined because subsequent SGR 22
+    // correctly resets intensity only. Ghostty renders this sequence faint,
+    // without decoration, so normalize this exact pair to SGR 2.
+    if (params.length === 2 && params[0] === 4 && params[1] === 2) params = [2]
 
     for (let i = 0; i < params.length; i++) {
       const p = params[i]
@@ -1020,6 +1073,60 @@ class NanoTermV2 {
 
   executeDCS(data) {
     // DCS sequences — minimal implementation
+  }
+
+  // -------------------------------------------------------------------------
+  // Kitty keyboard protocol
+  // -------------------------------------------------------------------------
+
+  get keyboardFlags() {
+    return this.useAlternate ? this.alternateKeyboardFlags : this.primaryKeyboardFlags
+  }
+
+  set keyboardFlags(value) {
+    if (this.useAlternate) this.alternateKeyboardFlags = value
+    else this.primaryKeyboardFlags = value
+  }
+
+  get keyboardStack() {
+    return this.useAlternate ? this.alternateKeyboardStack : this.primaryKeyboardStack
+  }
+
+  executeKeyboardProtocol(params, prefix) {
+    if (prefix === '?') {
+      this.send(`\x1b[?${this.keyboardFlags}u`)
+      return
+    }
+
+    if (prefix === '=') {
+      const flags = params[0] || 0
+      const mode = params[1] || 1
+      if (mode === 1) this.keyboardFlags = flags
+      else if (mode === 2) this.keyboardFlags |= flags
+      else if (mode === 3) this.keyboardFlags &= ~flags
+      return
+    }
+
+    if (prefix === '>') {
+      const stack = this.keyboardStack
+      if (stack.length >= 16) stack.shift()
+      stack.push(this.keyboardFlags)
+      this.keyboardFlags = params[0] || 0
+      return
+    }
+
+    if (prefix === '<') {
+      const stack = this.keyboardStack
+      let count = params[0] || 1
+      while (count > 0) {
+        if (stack.length === 0) {
+          this.keyboardFlags = 0
+          break
+        }
+        this.keyboardFlags = stack.pop()
+        count--
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1352,6 +1459,7 @@ class NanoTermV2 {
     }
 
     this.canvas.addEventListener('keydown', (e) => this.onKeyDown(e))
+    this.canvas.addEventListener('keyup', (e) => this.onKeyUp(e))
     this.canvas.addEventListener('keypress', (e) => this.onKeyPress(e))
 
     this.canvas.addEventListener('focus', () => {
@@ -1383,6 +1491,46 @@ class NanoTermV2 {
 
   onKeyDown(e) {
     this.cursorBlinkState = true
+
+    // Some macOS layouts expose the physical Quote key as a dead key. Canvas
+    // elements have no native text-composition surface, so waiting for the
+    // deprecated keypress event drops both quote forms entirely.
+    if (e.key === 'Dead' && e.code === 'Quote') {
+      e.preventDefault()
+      const quote = e.shiftKey ? '"' : "'"
+      this.send(
+        this.keyboardFlags & 8
+          ? this.encodeKittyKey({
+              key: quote,
+              code: e.code,
+              shiftKey: e.shiftKey,
+              altKey: e.altKey,
+              ctrlKey: e.ctrlKey,
+              metaKey: e.metaKey,
+              repeat: e.repeat,
+            })
+          : quote
+      )
+      return
+    }
+
+    // Applications commonly enable Kitty disambiguation without requesting
+    // all-key reporting, then rely on modified Enter for multiline input.
+    // Keep plain Enter as CR for recovery, but never collapse modified Enter.
+    if (
+      this.keyboardFlags & 8 ||
+      (this.keyboardFlags &&
+        e.key === 'Enter' &&
+        (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey))
+    ) {
+      const seq = this.encodeKittyKey(e, e.repeat ? 2 : 1)
+      if (seq) {
+        e.preventDefault()
+        this.send(seq)
+        return
+      }
+    }
+
     let seq = ''
     const modifier = (e.shiftKey ? 1 : 0) + (e.altKey ? 2 : 0) + (e.ctrlKey ? 4 : 0)
 
@@ -1522,10 +1670,65 @@ class NanoTermV2 {
   }
 
   onKeyPress(e) {
+    if (this.keyboardFlags & 8) return
     if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
       e.preventDefault()
       this.send(e.key)
     }
+  }
+
+  onKeyUp(e) {
+    if (!(this.keyboardFlags & 2) || !(this.keyboardFlags & 8)) return
+    const seq = this.encodeKittyKey(e, 3)
+    if (!seq) return
+    e.preventDefault()
+    this.send(seq)
+  }
+
+  encodeKittyKey(e, eventType = 1) {
+    const functional = {
+      Enter: 13,
+      Tab: 9,
+      Backspace: 127,
+      Escape: 27,
+      Insert: 2,
+      Delete: 3,
+      PageUp: 5,
+      PageDown: 6,
+    }
+    let keyCode = functional[e.key]
+    let textCode = 0
+
+    if (keyCode === undefined && e.key.length === 1) {
+      const codeMatch = /^(?:Key([A-Z])|Digit([0-9]))$/.exec(e.code || '')
+      const punctuationByCode = {
+        Backquote: 96,
+        Minus: 45,
+        Equal: 61,
+        BracketLeft: 91,
+        BracketRight: 93,
+        Backslash: 92,
+        Semicolon: 59,
+        Quote: 39,
+        Comma: 44,
+        Period: 46,
+        Slash: 47,
+        Space: 32,
+      }
+      if (codeMatch?.[1]) keyCode = codeMatch[1].toLowerCase().codePointAt(0)
+      else if (codeMatch?.[2]) keyCode = codeMatch[2].codePointAt(0)
+      else if (punctuationByCode[e.code] !== undefined) keyCode = punctuationByCode[e.code]
+      else keyCode = e.key.toLowerCase().codePointAt(0)
+      textCode = e.key.codePointAt(0)
+    }
+
+    if (keyCode === undefined) return ''
+
+    const modifiers =
+      1 + (e.shiftKey ? 1 : 0) + (e.altKey ? 2 : 0) + (e.ctrlKey ? 4 : 0) + (e.metaKey ? 8 : 0)
+    const eventField = this.keyboardFlags & 2 && eventType !== 1 ? `:${eventType}` : ''
+    const textField = this.keyboardFlags & 16 && textCode ? `;${textCode}` : ''
+    return `\x1b[${keyCode};${modifiers}${eventField}${textField}u`
   }
 
   onMouseDown(e) {

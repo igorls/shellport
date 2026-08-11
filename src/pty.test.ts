@@ -3,7 +3,7 @@
  */
 
 import { describe, test, expect } from 'bun:test'
-import { sanitizePTYData } from './server.js'
+import { PTYDataSanitizer, sanitizePTYData } from './server.js'
 import { spawnPty } from './pty.js'
 
 describe('PTY Sanitization', () => {
@@ -36,8 +36,33 @@ describe('PTY Sanitization', () => {
     expect(decoded).not.toContain('\x1b]52')
   })
 
-  test('handles split sequences across chunks', () => {
-    // This is complex for a simple buffer filter, but good to keep in mind
+  test('preserves a multibyte glyph split across PTY chunks byte-for-byte', () => {
+    const bytes = new TextEncoder().encode('before ⣿ after')
+    const glyphStart = bytes.indexOf(0xe2)
+    const sanitizer = new PTYDataSanitizer()
+    const first = sanitizer.write(bytes.slice(0, glyphStart + 1))
+    const second = sanitizer.write(bytes.slice(glyphStart + 1))
+    const combined = new Uint8Array(first.length + second.length)
+    combined.set(first)
+    combined.set(second, first.length)
+    expect(combined).toEqual(bytes)
+    expect(new TextDecoder().decode(combined)).toBe('before ⣿ after')
+  })
+
+  test('blocks sensitive control sequences split across PTY chunks', () => {
+    const sanitizer = new PTYDataSanitizer()
+    const chunks = ['safe\x1b', '[6', 'ntext\x1b]5', '2;c;secret\x1b', '\\after'].map((value) =>
+      new TextEncoder().encode(value)
+    )
+    const output = chunks.map((chunk) => sanitizer.write(chunk))
+    const length = output.reduce((sum, chunk) => sum + chunk.length, 0)
+    const combined = new Uint8Array(length)
+    let offset = 0
+    for (const chunk of output) {
+      combined.set(chunk, offset)
+      offset += chunk.length
+    }
+    expect(new TextDecoder().decode(combined)).toBe('safetextafter')
   })
 })
 

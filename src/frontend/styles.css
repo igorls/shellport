@@ -5,6 +5,7 @@
 }
 
 body {
+  --sidebar-width: 220px;
   display: flex;
   height: 100vh;
   background: #0d0d0d;
@@ -17,15 +18,23 @@ body {
    SIDEBAR - Session Manager
    ═══════════════════════════════════════════════════════════════════════ */
 #sidebar {
-  width: 220px;
+  flex: 0 0 var(--sidebar-width);
+  width: var(--sidebar-width);
   min-width: 180px;
   max-width: 400px;
-  resize: horizontal;
   background: #111;
   border-right: 1px solid #2a2a2a;
   display: flex;
   flex-direction: column;
   z-index: 10;
+}
+
+body.sidebar-collapsed #sidebar {
+  flex-basis: 0;
+  width: 0;
+  min-width: 0;
+  border-right: 0;
+  overflow: hidden;
 }
 
 #sidebar-header {
@@ -45,6 +54,72 @@ body {
   align-items: center;
   gap: 6px;
   color: #a78bfa;
+}
+
+.sidebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.icon-btn,
+#sidebar-restore {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #333;
+  border-radius: 4px;
+  background: #222;
+  color: #bbb;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.icon-btn:hover,
+#sidebar-restore:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+#sidebar-resizer {
+  position: relative;
+  flex: 0 0 5px;
+  width: 5px;
+  margin-left: -3px;
+  cursor: col-resize;
+  z-index: 20;
+  outline: none;
+}
+
+#sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+#sidebar-resizer:hover::after,
+#sidebar-resizer:focus-visible::after,
+body.sidebar-resizing #sidebar-resizer::after {
+  background: #a78bfa;
+}
+
+#sidebar-restore {
+  display: none;
+  position: absolute;
+  top: 10px;
+  left: 5px;
+  z-index: 2;
+}
+
+body.sidebar-collapsed #sidebar-resizer {
+  margin-left: 0;
+  cursor: default;
+}
+
+body.sidebar-collapsed #sidebar-restore {
+  display: block;
 }
 
 #sessions {
@@ -147,6 +222,7 @@ body {
    ═══════════════════════════════════════════════════════════════════════ */
 #main {
   flex: 1;
+  min-width: 0;
   position: relative;
   background: #0a0a0a;
   display: flex;

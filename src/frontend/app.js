@@ -86,6 +86,7 @@ async function init() {
   }
 
   document.getElementById('new-session').addEventListener('click', createSession)
+  setupSidebarControls()
 
   // Context menu actions
   document.getElementById('context-menu').addEventListener('click', (e) => {
@@ -123,6 +124,83 @@ async function init() {
   })
 
   createSession()
+}
+
+function setupSidebarControls() {
+  const MIN_WIDTH = 180
+  const MAX_WIDTH = 400
+  const body = document.body
+  const resizer = document.getElementById('sidebar-resizer')
+  const toggle = document.getElementById('sidebar-toggle')
+  const restore = document.getElementById('sidebar-restore')
+  let width = Math.max(
+    MIN_WIDTH,
+    Math.min(MAX_WIDTH, Number(localStorage.getItem('shellport-sidebar-width')) || 220)
+  )
+
+  const resizeTerminal = () => {
+    const term = activeSessions.get(currentSessionId)?.term
+    if (!term) return
+    requestAnimationFrame(() => term.resize())
+  }
+
+  const setWidth = (nextWidth) => {
+    width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(nextWidth)))
+    body.style.setProperty('--sidebar-width', `${width}px`)
+    resizer.setAttribute('aria-valuenow', String(width))
+    localStorage.setItem('shellport-sidebar-width', String(width))
+    resizeTerminal()
+  }
+
+  const setCollapsed = (collapsed) => {
+    body.classList.toggle('sidebar-collapsed', collapsed)
+    toggle.setAttribute('aria-expanded', String(!collapsed))
+    localStorage.setItem('shellport-sidebar-collapsed', String(collapsed))
+    resizeTerminal()
+    if (!collapsed) toggle.focus()
+  }
+
+  setWidth(width)
+  setCollapsed(localStorage.getItem('shellport-sidebar-collapsed') === 'true')
+
+  toggle.addEventListener('click', () => setCollapsed(true))
+  restore.addEventListener('click', () => setCollapsed(false))
+
+  resizer.addEventListener('pointerdown', (event) => {
+    if (body.classList.contains('sidebar-collapsed') || event.target === restore) return
+    event.preventDefault()
+    resizer.setPointerCapture(event.pointerId)
+    body.classList.add('sidebar-resizing')
+  })
+
+  resizer.addEventListener('pointermove', (event) => {
+    if (!body.classList.contains('sidebar-resizing')) return
+    setWidth(event.clientX)
+  })
+
+  const finishResize = (event) => {
+    if (!body.classList.contains('sidebar-resizing')) return
+    body.classList.remove('sidebar-resizing')
+    if (resizer.hasPointerCapture(event.pointerId)) resizer.releasePointerCapture(event.pointerId)
+  }
+  resizer.addEventListener('pointerup', finishResize)
+  resizer.addEventListener('pointercancel', finishResize)
+
+  resizer.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      setCollapsed(!body.classList.contains('sidebar-collapsed'))
+      return
+    }
+    if (body.classList.contains('sidebar-collapsed')) return
+    const step = event.shiftKey ? 30 : 10
+    if (event.key === 'ArrowLeft') setWidth(width - step)
+    else if (event.key === 'ArrowRight') setWidth(width + step)
+    else if (event.key === 'Home') setWidth(MIN_WIDTH)
+    else if (event.key === 'End') setWidth(MAX_WIDTH)
+    else return
+    event.preventDefault()
+  })
 }
 
 function switchSession(id) {

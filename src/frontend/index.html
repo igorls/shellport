@@ -25,12 +25,43 @@
           </svg>
           ShellPort
         </span>
-        <button class="btn" id="new-session">+ New</button>
+        <div class="sidebar-actions">
+          <button class="btn" id="new-session">+ New</button>
+          <button
+            class="icon-btn"
+            id="sidebar-toggle"
+            type="button"
+            aria-label="Collapse session sidebar"
+            title="Collapse sidebar"
+          >
+            ‹
+          </button>
+        </div>
       </div>
       <ul id="sessions"></ul>
       <div id="enc-status">
         <span>🔓 Plaintext</span>
       </div>
+    </div>
+
+    <div
+      id="sidebar-resizer"
+      role="separator"
+      aria-label="Resize session sidebar"
+      aria-orientation="vertical"
+      aria-valuemin="180"
+      aria-valuemax="400"
+      aria-valuenow="220"
+      tabindex="0"
+    >
+      <button
+        id="sidebar-restore"
+        type="button"
+        aria-label="Expand session sidebar"
+        title="Expand sidebar"
+      >
+        ›
+      </button>
     </div>
 
     <div id="main"></div>

@@ -51,6 +51,10 @@ export class CanvasRenderer {
     this.charWidth = Math.ceil(m.width)
     const lineHeight = this.options.lineHeight || 1.15
     this.charHeight = Math.ceil(fontSize * lineHeight)
+    const glyphHeight = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent
+    this.textBaselineOffset = Math.round(
+      (this.charHeight - glyphHeight) / 2 + m.actualBoundingBoxAscent
+    )
 
     // Invalidate tofu reference data so it's re-probed with current font
     this._tofuData = null
@@ -307,7 +311,7 @@ export class CanvasRenderer {
       this.ctx.font = fontString
       this.lastFont = fontString
     }
-    this.ctx.textBaseline = 'top'
+    this.ctx.textBaseline = 'alphabetic'
 
     for (let i = 0; i < length; i++) {
       const off = rowOffset + (startX + i) * CELL_WORDS
@@ -316,7 +320,7 @@ export class CanvasRenderer {
       const cx = (startX + i) * this.charWidth
       if (cp >= 0x2500 && this.renderSpecialChar(cp, cx, baseline, textColor)) continue
       if (!this._isGlyphRenderable(cp)) continue
-      this.ctx.fillText(String.fromCodePoint(cp), cx, baseline)
+      this.ctx.fillText(String.fromCodePoint(cp), cx, baseline + this.textBaselineOffset)
     }
 
     // Underline

@@ -93,6 +93,17 @@ vec4 resolveColor(uint color, vec4 defaultColor) {
     return color == 0u ? defaultColor : unpackRGBA(color);
 }
 
+vec2 glyphAtlasUV(uint atlasIdx, vec2 localUV) {
+    uint atlasX = (atlasIdx - 1u) % uint(u_atlasGridSize);
+    uint atlasY = (atlasIdx - 1u) / uint(u_atlasGridSize);
+    vec2 origin = vec2(float(atlasX), float(atlasY)) * u_atlasCellSize;
+    // Packed atlas slots have no gutter. Sampling their exact edge can round
+    // into the next slot and paint a thin, underline-like strip below every
+    // ordinary glyph. Stay on pixel centres inside the current slot.
+    vec2 samplePx = vec2(0.5) + localUV * max(vec2(0.0), u_atlasCellSize - vec2(1.0));
+    return (origin + samplePx) / u_atlasTexSize;
+}
+
 // Perfect anti-aliased square-capped bounding box SDF
 float boxAlpha(vec2 p, float minX, float maxX, float minY, float maxY) {
     float dx = max(minX - p.x, p.x - maxX);
@@ -349,15 +360,7 @@ void main() {
     }
     // ── Atlas text rendering ──
     else if (codepoint > 32u && atlasIdx > 0u) {
-        // Decode atlas position from index
-        uint atlasX = (atlasIdx - 1u) % uint(u_atlasGridSize);
-        uint atlasY = (atlasIdx - 1u) / uint(u_atlasGridSize);
-
-        // Calculate UV in atlas texture
-        vec2 atlasUV = vec2(
-            (float(atlasX) * u_atlasCellSize.x + localUV.x * u_atlasCellSize.x) / u_atlasTexSize.x,
-            (float(atlasY) * u_atlasCellSize.y + localUV.y * u_atlasCellSize.y) / u_atlasTexSize.y
-        );
+        vec2 atlasUV = glyphAtlasUV(atlasIdx, localUV);
 
         // Note: italic glyphs are already rasterized italic in the atlas
         // No shader skew needed — it caused double-application artifacts
@@ -409,12 +412,7 @@ void main() {
             color = u_cursorColor;
             // Re-render glyph in background color for legibility
             if (codepoint > 32u && atlasIdx > 0u) {
-                uint ax = (atlasIdx - 1u) % uint(u_atlasGridSize);
-                uint ay = (atlasIdx - 1u) / uint(u_atlasGridSize);
-                vec2 aUV = vec2(
-                    (float(ax) * u_atlasCellSize.x + localUV.x * u_atlasCellSize.x) / u_atlasTexSize.x,
-                    (float(ay) * u_atlasCellSize.y + localUV.y * u_atlasCellSize.y) / u_atlasTexSize.y
-                );
+                vec2 aUV = glyphAtlasUV(atlasIdx, localUV);
                 vec4 g = texture(u_atlasTex, aUV);
                 color = mix(color, u_defaultBg, g.a);
             }
@@ -616,6 +614,10 @@ export class WebGLRenderer {
     const nextCharWidth = Math.ceil(m.width)
     const lineHeight = this.options.lineHeight || 1.15
     const nextCharHeight = Math.ceil(fontSize * lineHeight)
+    const glyphHeight = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent
+    const nextTextBaselineOffset = Math.round(
+      (nextCharHeight - glyphHeight) / 2 + m.actualBoundingBoxAscent
+    )
 
     const fontChanged =
       forceAtlasReset ||
@@ -625,6 +627,7 @@ export class WebGLRenderer {
 
     this.charWidth = nextCharWidth
     this.charHeight = nextCharHeight
+    this.textBaselineOffset = nextTextBaselineOffset
     this._lastFontSpec = fontSpec
 
     if (fontChanged) {
@@ -786,9 +789,9 @@ export class WebGLRenderer {
     fontParts.push(`${this.options.fontSize * dpr}px`)
     fontParts.push(this.options.fontFamily)
     ctx.font = fontParts.join(' ')
-    ctx.textBaseline = 'top'
+    ctx.textBaseline = 'alphabetic'
     ctx.fillStyle = '#fff' // White glyph — shader tints with FG color via alpha
-    ctx.fillText(String.fromCodePoint(cp), slotX, slotY)
+    ctx.fillText(String.fromCodePoint(cp), slotX, slotY + this.textBaselineOffset * dpr)
 
     // Upload this single glyph to the GPU atlas texture
     const gl = this.gl
@@ -973,6 +976,11 @@ export class WebGLRenderer {
     }
     const gridData = this._gridData
 
+    // A scrollback row can have fewer columns than the current grid after a
+    // resize. Clear the reused snapshot before partial row copies so glyphs
+    // from the previous frame cannot survive in uncovered cells.
+    if (scrollbackVisible) gridData.fill(0)
+
     let destRow = 0
 
     if (scrollbackVisible) {
@@ -1041,6 +1049,7 @@ export class WebGLRenderer {
       const flags = word0 & CELL_FLAGS_MASK
 
       if (cp <= 32 || (cp >= 0x2500 && cp <= 0x259f) || (cp >= 0x2800 && cp <= 0x28ff)) {
+        gridData[i * 4 + 3] = 0
         i++
         continue
       }

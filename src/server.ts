@@ -506,19 +506,78 @@ function handleDataMessage(
  * Sanitizes data coming from the PTY before sending it to the client.
  * Blocks sequences that could be used for fingerprinting or dangerous client-side actions.
  */
+export class PTYDataSanitizer {
+  private state: 'ground' | 'escape' | 'csi' | 'osc-prefix' | 'osc52' | 'osc52-escape' = 'ground'
+  private readonly pending: number[] = []
+
+  write(data: Uint8Array): Uint8Array {
+    const output: number[] = []
+    const flushPending = (): void => {
+      output.push(...this.pending)
+      this.pending.length = 0
+    }
+
+    for (const byte of data) {
+      switch (this.state) {
+        case 'ground':
+          if (byte === 0x1b) {
+            this.pending.push(byte)
+            this.state = 'escape'
+          } else output.push(byte)
+          break
+        case 'escape':
+          this.pending.push(byte)
+          if (byte === 0x5b) this.state = 'csi'
+          else if (byte === 0x5d) this.state = 'osc-prefix'
+          else {
+            flushPending()
+            this.state = 'ground'
+          }
+          break
+        case 'csi':
+          this.pending.push(byte)
+          if (byte >= 0x40 && byte <= 0x7e) {
+            const isCursorPositionQuery =
+              this.pending.length === 4 &&
+              this.pending[0] === 0x1b &&
+              this.pending[1] === 0x5b &&
+              this.pending[2] === 0x36 &&
+              this.pending[3] === 0x6e
+            if (isCursorPositionQuery) this.pending.length = 0
+            else flushPending()
+            this.state = 'ground'
+          }
+          break
+        case 'osc-prefix': {
+          this.pending.push(byte)
+          const expected = [0x1b, 0x5d, 0x35, 0x32, 0x3b]
+          const stillMatches = this.pending.every((value, index) => value === expected[index])
+          if (!stillMatches) {
+            flushPending()
+            this.state = 'ground'
+          } else if (this.pending.length === expected.length) {
+            this.pending.length = 0
+            this.state = 'osc52'
+          }
+          break
+        }
+        case 'osc52':
+          if (byte === 0x07) this.state = 'ground'
+          else if (byte === 0x1b) this.state = 'osc52-escape'
+          break
+        case 'osc52-escape':
+          if (byte === 0x5c) this.state = 'ground'
+          else this.state = byte === 0x1b ? 'osc52-escape' : 'osc52'
+          break
+      }
+    }
+
+    return Uint8Array.from(output)
+  }
+}
+
 export function sanitizePTYData(data: Uint8Array): Uint8Array {
-  let str = new TextDecoder().decode(data)
-
-  // 1. Block DSR (Device Status Report) - CSI 6 n
-  // Prevents the shell from querying the client's cursor position.
-  str = str.replace(/\x1b\[6n/g, '')
-
-  // 2. Block OSC 52 (Clipboard Write)
-  // Even though the frontend has a confirmation prompt, blocking at server level
-  // provides defense-in-depth for users who might disable prompts.
-  str = str.replace(/\x1b\]52;[^\x07\x1b]*[\x07\x1b\\]/g, '')
-
-  return new TextEncoder().encode(str)
+  return new PTYDataSanitizer().write(data)
 }
 
 /** Spawn a PTY process and wire it to the WebSocket */
@@ -546,6 +605,7 @@ function spawnPTY(
       argv = [shell]
     }
 
+    const sanitizer = new PTYDataSanitizer()
     const proc = spawnPty(argv, {
       env,
       cols: 80,
@@ -553,7 +613,7 @@ function spawnPTY(
       onData(data): void {
         sessionData.sendQ.add(async () => {
           if (ws.readyState === 1) {
-            const sanitized = sanitizePTYData(data)
+            const sanitized = sanitizer.write(data)
             ws.send(await pack(cryptoKey, FrameType.DATA, sanitized))
           }
         })
