@@ -785,10 +785,26 @@ export class WebGLRenderer {
     if (styleFlags & ATTR.ITALIC) fontParts.push('italic')
     fontParts.push(`${this.options.fontSize * dpr}px`)
     fontParts.push(this.options.fontFamily)
-    ctx.font = fontParts.join(' ')
-    ctx.textBaseline = 'top'
+    const fontString = fontParts.join(' ')
+    ctx.font = fontString
+    // Center the font box (em square, ascent+descent) inside the slot. The
+    // shader maps the slot 1:1 onto the cell quad, so a 'top' raster leaves the
+    // glyph top-hugging the cell. Measured at the raster size (fontSize*dpr),
+    // the alphabetic baseline is placed so the ink center lands on the slot
+    // center — matching CanvasRenderer and the shader's box-drawing center.
+    // Fall back to 'middle' when font box metrics are unavailable.
+    const mm = ctx.measureText('W')
+    const fa = mm.fontBoundingBoxAscent
+    const fd = mm.fontBoundingBoxDescent
+    let baseMode = 'middle'
+    let baseY = slotY + ch / 2
+    if (Number.isFinite(fa) && Number.isFinite(fd) && fa + fd > 0) {
+      baseMode = 'alphabetic'
+      baseY = slotY + (ch - (fa + fd)) / 2 + fa
+    }
+    ctx.textBaseline = baseMode
     ctx.fillStyle = '#fff' // White glyph — shader tints with FG color via alpha
-    ctx.fillText(String.fromCodePoint(cp), slotX, slotY)
+    ctx.fillText(String.fromCodePoint(cp), slotX, baseY)
 
     // Upload this single glyph to the GPU atlas texture
     const gl = this.gl

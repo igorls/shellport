@@ -51,6 +51,24 @@ export class CanvasRenderer {
     this.charWidth = Math.ceil(m.width)
     const lineHeight = this.options.lineHeight || 1.15
     this.charHeight = Math.ceil(fontSize * lineHeight)
+    // Compute the alphabetic-baseline offset that centers the font box (the
+    // em square, ascent+descent) inside the cell. Canvas 'middle'/'top'
+    // baselines are anchored to the em *square* or cell origin, which leaves
+    // glyphs optically high against box-drawing borders and highlights — the
+    // em box (16px for JetBrains Mono 14) is smaller than the cell (17px) and
+    // cap ink sits above the baseline. Centering the font box and drawing at
+    // 'alphabetic' lands the ink center on the cell center. Falls back to the
+    // middle baseline when font box metrics are unavailable.
+    const fa = m.fontBoundingBoxAscent
+    const fd = m.fontBoundingBoxDescent
+    if (Number.isFinite(fa) && Number.isFinite(fd) && fa + fd > 0) {
+      this._baselineOffset = (this.charHeight - (fa + fd)) / 2 + fa
+      this._baselineMode = 'alphabetic'
+    } else {
+      this._baselineOffset = this.charHeight / 2
+      this._baselineMode = 'middle'
+    }
+    this._baselineCache = null
 
     // Invalidate tofu reference data so it's re-probed with current font
     this._tofuData = null
@@ -307,7 +325,29 @@ export class CanvasRenderer {
       this.ctx.font = fontString
       this.lastFont = fontString
     }
-    this.ctx.textBaseline = 'top'
+    // Draw at the alphabetic baseline positioned so the font box (em square,
+    // ascent+descent) is centered in the cell. This puts the glyph ink center
+    // on the same pixel row the procedural box-drawing code uses for its
+    // border (my = y + h/2), so text sits level with rules and highlights.
+    // Fall back to 'middle' if box metrics are unavailable.
+    const baseMode = this._baselineMode || 'middle'
+    this.ctx.textBaseline = baseMode
+    let baseOffset = this._baselineOffset
+    if (baseMode === 'alphabetic' && !this._baselineCache) {
+      this._baselineCache = new Map()
+    }
+    if (baseMode === 'alphabetic' && !this._baselineCache.has(fontString)) {
+      const mm = this.ctx.measureText('W')
+      const fa = mm.fontBoundingBoxAscent
+      const fd = mm.fontBoundingBoxDescent
+      if (Number.isFinite(fa) && Number.isFinite(fd) && fa + fd > 0) {
+        baseOffset = (this.charHeight - (fa + fd)) / 2 + fa
+      }
+      this._baselineCache.set(fontString, baseOffset)
+    } else if (baseMode === 'alphabetic') {
+      baseOffset = this._baselineCache.get(fontString) ?? baseOffset
+    }
+    const textY = baseline + baseOffset
 
     for (let i = 0; i < length; i++) {
       const off = rowOffset + (startX + i) * CELL_WORDS
@@ -316,7 +356,7 @@ export class CanvasRenderer {
       const cx = (startX + i) * this.charWidth
       if (cp >= 0x2500 && this.renderSpecialChar(cp, cx, baseline, textColor)) continue
       if (!this._isGlyphRenderable(cp)) continue
-      this.ctx.fillText(String.fromCodePoint(cp), cx, baseline)
+      this.ctx.fillText(String.fromCodePoint(cp), cx, textY)
     }
 
     // Underline
@@ -528,8 +568,25 @@ export class CanvasRenderer {
             cursorFontParts.push(`${this.options.fontSize}px`)
             cursorFontParts.push(this.options.fontFamily)
             this.ctx.font = cursorFontParts.join(' ')
-            this.ctx.textBaseline = 'top'
-            this.ctx.fillText(String.fromCodePoint(cp), x, adjustedY)
+            // Match renderRunText: font box centered in the cell, not top-hugging.
+            const cursorBaseMode = this._baselineMode || 'middle'
+            this.ctx.textBaseline = cursorBaseMode
+            let cursorOffset = this._baselineOffset
+            if (cursorBaseMode === 'alphabetic' && this._baselineCache) {
+              const cf = cursorFontParts.join(' ')
+              if (!this._baselineCache.has(cf)) {
+                const mm = this.ctx.measureText('W')
+                const fa = mm.fontBoundingBoxAscent
+                const fd = mm.fontBoundingBoxDescent
+                if (Number.isFinite(fa) && Number.isFinite(fd) && fa + fd > 0) {
+                  cursorOffset = (this.charHeight - (fa + fd)) / 2 + fa
+                }
+                this._baselineCache.set(cf, cursorOffset)
+              } else {
+                cursorOffset = this._baselineCache.get(cf) ?? cursorOffset
+              }
+            }
+            this.ctx.fillText(String.fromCodePoint(cp), x, adjustedY + cursorOffset)
           }
           this.lastFont = null
         }
