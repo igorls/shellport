@@ -241,6 +241,11 @@ function createSession() {
     term.write('\x1b[90mConnecting...\x1b[0m\r\n')
   }
 
+  // The connection message ends with a newline. Clear that preceding line
+  // before showing the authenticated/TOTP state, otherwise "Connecting..."
+  // remains visible above the live terminal output.
+  const clearConnectingMessage = () => term.write('\x1b[1A\r\x1b[2K')
+
   ws.onmessage = async (e) => {
     const data = e.data
 
@@ -272,7 +277,7 @@ function createSession() {
       const decoded = await unpack(sessionKey || (await getBaseKey(secret)), data)
       if (decoded && decoded.type === FT_TOTP_CHALLENGE) {
         totpPending = true
-        term.write('\x1b[2K\x1b[G')
+        clearConnectingMessage()
         term.write('\x1b[93m🔐 TOTP verification required\x1b[0m\r\n')
         showTOTPModal((code) => {
           const payload = new TextEncoder().encode(code)
@@ -287,7 +292,7 @@ function createSession() {
         const plainView = new Uint8Array(data)
         if (plainView.length >= 1 && plainView[0] === FT_TOTP_CHALLENGE) {
           totpPending = true
-          term.write('\x1b[2K\x1b[G')
+          clearConnectingMessage()
           term.write('\x1b[93m🔐 TOTP verification required\x1b[0m\r\n')
           showTOTPModal((code) => {
             sendMsg(FT_TOTP_RESPONSE, new TextEncoder().encode(code))
@@ -303,7 +308,7 @@ function createSession() {
         statusEl.classList.remove('pending')
         statusEl.classList.add('running')
       }
-      term.write('\x1b[2K\x1b[G')
+      clearConnectingMessage()
       term.resize()
       // Flush any resize queued during handshake (e.g. font-load correction)
       if (pendingResize) {
@@ -338,7 +343,7 @@ function createSession() {
             statusEl.classList.remove('pending')
             statusEl.classList.add('running')
           }
-          term.write('\x1b[2K\x1b[G')
+          clearConnectingMessage()
           term.resize()
           // Flush any resize queued during handshake (e.g. font-load correction)
           if (pendingResize) {
