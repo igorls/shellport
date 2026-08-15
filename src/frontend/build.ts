@@ -9,7 +9,7 @@
  * into a single IIFE by Bun's bundler before inlining.
  */
 
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, readdirSync, statSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -20,12 +20,32 @@ function readFrontendFile(filename: string): string {
 }
 
 /**
+ * True when the pre-built bundle is missing or any NanoTermV2 source is
+ * newer than it — i.e. a render now would serve stale frontend code.
+ * This catches the post-`git pull` case, where a checkout rewrites the
+ * sources with fresh mtimes while the untracked bundle lingers on disk.
+ */
+export function isBundleStale(bundlePath: string, srcDir: string): boolean {
+  if (!existsSync(bundlePath)) return true
+  if (!existsSync(srcDir)) return false
+  const bundleMtime = statSync(bundlePath).mtimeMs
+  for (const name of readdirSync(srcDir)) {
+    const file = resolve(srcDir, name)
+    if (statSync(file).isFile() && statSync(file).mtimeMs > bundleMtime) return true
+  }
+  return false
+}
+
+/**
  * Bundle NanoTermV2 ES modules into a single IIFE script.
  * Skips if the output already exists and sources haven't changed.
  */
 async function bundleNanoTerm(): Promise<void> {
   const entrypoint = resolve(__dirname, 'nanoterm/index.js')
   if (!existsSync(entrypoint)) return // Pre-bundled: skip
+  if (!isBundleStale(resolve(__dirname, 'nanoterm.js'), resolve(__dirname, 'nanoterm'))) {
+    return // Bundle is fresh: skip
+  }
 
   const result = await Bun.build({
     entrypoints: [entrypoint],
