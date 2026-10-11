@@ -71,11 +71,13 @@ describe('PtySession', () => {
     async () => {
       let output = ''
       const decoder = new TextDecoder('utf-8', { fatal: false })
+      // Size is reported from the stdout 'resize' event (SIGWINCH). Reading
+      // columns from a stdin handler races that signal and can print the old size.
       const session = spawnPty(
         [
           process.execPath,
           '-e',
-          "process.stdin.setEncoding('utf8'); console.log('ready:' + process.stdout.columns + 'x' + process.stdout.rows); process.stdin.once('data', () => { console.log('resized:' + process.stdout.columns + 'x' + process.stdout.rows); process.exit(0) }); setTimeout(() => process.exit(2), 8000)",
+          "process.stdin.setEncoding('utf8'); process.stdout.on('resize', () => { console.log('resized:' + process.stdout.columns + 'x' + process.stdout.rows) }); console.log('ready:' + process.stdout.columns + 'x' + process.stdout.rows); process.stdin.once('data', () => process.exit(0)); setTimeout(() => process.exit(2), 8000)",
         ],
         {
           cols: 40,
@@ -88,8 +90,8 @@ describe('PtySession', () => {
 
       await waitFor(() => output.includes('ready:40x10'))
       session.resize(100, 30)
-      session.write('report\r')
       await waitFor(() => output.includes('resized:100x30'))
+      session.write('report\r')
       await session.exited
 
       expect(output).toContain('resized:100x30')
