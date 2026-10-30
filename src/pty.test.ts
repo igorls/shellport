@@ -36,8 +36,26 @@ describe('PTY Sanitization', () => {
     expect(decoded).not.toContain('\x1b]52')
   })
 
-  test('handles split sequences across chunks', () => {
-    // This is complex for a simple buffer filter, but good to keep in mind
+  test('strips ST-terminated OSC 52 without leaving the backslash', () => {
+    const input = new TextEncoder().encode('a\x1b]52;c;SGVsbG8=\x1b\\b')
+    expect(new TextDecoder().decode(sanitizePTYData(input))).toBe('ab')
+  })
+
+  test('keeps a multibyte character split across chunks byte-exact', () => {
+    const bytes = new TextEncoder().encode('\x1b[6nação ✓')
+    const first = sanitizePTYData(bytes.subarray(0, 6))
+    const second = sanitizePTYData(bytes.subarray(6))
+    expect(new TextDecoder().decode(new Uint8Array([...first, ...second]))).toBe('ação ✓')
+  })
+
+  test('passes non-UTF-8 bytes through unchanged', () => {
+    const input = new Uint8Array([0x61, 0xe9, 0x1b, 0x5b, 0x36, 0x6e, 0x62, 0xff])
+    expect([...sanitizePTYData(input)]).toEqual([0x61, 0xe9, 0x62, 0xff])
+  })
+
+  test('leaves an unterminated OSC 52 and other escapes intact', () => {
+    const input = new TextEncoder().encode('\x1b[5n\x1b]52;c;abc')
+    expect(new TextDecoder().decode(sanitizePTYData(input))).toBe('\x1b[5n\x1b]52;c;abc')
   })
 })
 

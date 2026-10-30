@@ -13,8 +13,8 @@
  * - TOTP 2FA authentication (RFC 6238)
  */
 
-import { spawn, spawnSync } from 'bun'
 import { spawnPty } from './pty.js'
+import { sanitizeTerminalOutput } from './vt.js'
 import {
   deriveKey,
   pack,
@@ -200,13 +200,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
       process.exit(1)
     }
 
-    const tsCheck = spawnSync(['tailscale', 'version'])
+    const tsCheck = Bun.spawnSync(['tailscale', 'version'])
     if (tsCheck.exitCode !== 0) {
       console.error('[ShellPort] ❌ Tailscale CLI not found in PATH.')
       process.exit(1)
     }
     console.log(`[ShellPort] 🌐 Tailscale ${config.tailscale} on localhost:${config.port}...`)
-    spawn(['tailscale', config.tailscale, `localhost:${config.port}`], {
+    Bun.spawn(['tailscale', config.tailscale, `localhost:${config.port}`], {
       stdout: 'inherit',
       stderr: 'inherit',
     })
@@ -507,18 +507,7 @@ function handleDataMessage(
  * Blocks sequences that could be used for fingerprinting or dangerous client-side actions.
  */
 export function sanitizePTYData(data: Uint8Array): Uint8Array {
-  let str = new TextDecoder().decode(data)
-
-  // 1. Block DSR (Device Status Report) - CSI 6 n
-  // Prevents the shell from querying the client's cursor position.
-  str = str.replace(/\x1b\[6n/g, '')
-
-  // 2. Block OSC 52 (Clipboard Write)
-  // Even though the frontend has a confirmation prompt, blocking at server level
-  // provides defense-in-depth for users who might disable prompts.
-  str = str.replace(/\x1b\]52;[^\x07\x1b]*[\x07\x1b\\]/g, '')
-
-  return new TextEncoder().encode(str)
+  return sanitizeTerminalOutput(data)
 }
 
 /** Spawn a PTY process and wire it to the WebSocket */

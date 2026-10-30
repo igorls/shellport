@@ -61,6 +61,19 @@ describe('isBundleStale', () => {
     expect(isBundleStale(bundle, src)).toBe(true)
   })
 
+  test('an extra source outside the dir (shared VT core) newer than the bundle is stale', () => {
+    const bundle = join(root, 'bundle.js')
+    const src = join(root, 'src')
+    const vtCore = join(root, 'vt.ts')
+    for (const name of ['index.js', 'helper.js', 'extra.js']) touchAt(join(src, name), 1_000_000)
+    writeFileSync(vtCore, '// vt v2')
+    touchAt(vtCore, 3_000_000)
+    writeFileSync(bundle, '// bundled v1')
+    touchAt(bundle, 2_000_000)
+    expect(isBundleStale(bundle, src)).toBe(false)
+    expect(isBundleStale(bundle, src, [vtCore])).toBe(true)
+  })
+
   test('missing source dir is fresh (pre-bundled distribution)', () => {
     const bundle = join(root, 'bundle.js')
     writeFileSync(bundle, '// pre-bundled')

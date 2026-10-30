@@ -1,5 +1,3 @@
-import { spawn } from 'bun'
-
 export interface PtySessionOptions {
   readonly cols: number
   readonly rows: number
@@ -11,22 +9,33 @@ export interface PtySessionOptions {
 export interface PtySession {
   readonly pid: number
   readonly exited: Promise<number>
+  readonly exitCode: number | null
   write(data: string | Uint8Array): void
   resize(cols: number, rows: number): void
   close(): void
-  kill(): void
+  kill(signal?: NodeJS.Signals | number): void
+  unref(): void
+}
+
+function clampDim(value: number, fallback: number, max: number): number {
+  const n = Math.floor(Number(value))
+  if (!Number.isFinite(n) || n < 1) return fallback
+  return Math.min(max, n)
 }
 
 /** Spawn a command behind Bun's native PTY and expose only terminal operations. */
 export function spawnPty(command: readonly string[], options: PtySessionOptions): PtySession {
   if (command.length === 0) throw new Error('PTY command must not be empty')
 
-  const proc = spawn([...command], {
+  const cols = clampDim(options.cols, 80, 1000)
+  const rows = clampDim(options.rows, 24, 500)
+
+  const proc = Bun.spawn([...command], {
     cwd: options.cwd,
     env: options.env,
     terminal: {
-      cols: options.cols,
-      rows: options.rows,
+      cols,
+      rows,
       data(_terminal, data): void {
         options.onData(data)
       },
@@ -41,17 +50,48 @@ export function spawnPty(command: readonly string[], options: PtySessionOptions)
   return {
     pid: proc.pid,
     exited: proc.exited,
-    write: (data): void => {
-      terminal.write(data)
+    get exitCode(): number | null {
+      return proc.exitCode
     },
-    resize: (cols, rows): void => {
-      terminal.resize(cols, rows)
+    write: (data): void => {
+      if (proc.exitCode !== null) return
+      try {
+        terminal.write(data)
+      } catch {
+        // Ignore writes to a closed PTY descriptor
+      }
+    },
+    resize: (nextCols, nextRows): void => {
+      if (proc.exitCode !== null) return
+      const safeCols = clampDim(nextCols, cols, 1000)
+      const safeRows = clampDim(nextRows, rows, 500)
+      try {
+        terminal.resize(safeCols, safeRows)
+      } catch {
+        // ConPTY / exited PTY handles may throw if resized during teardown
+      }
     },
     close: (): void => {
-      terminal.close()
+      try {
+        terminal.close()
+      } catch {
+        // Already closed
+      }
     },
-    kill: (): void => {
-      proc.kill()
+    kill: (signal): void => {
+      try {
+        if (signal !== undefined) proc.kill(signal)
+        else proc.kill()
+      } catch {
+        // Process already exited
+      }
+    },
+    unref: (): void => {
+      try {
+        proc.unref()
+      } catch {
+        // Ignore if not supported or already exited
+      }
     },
   }
 }

@@ -24,8 +24,14 @@ function readFrontendFile(filename: string): string {
  * newer than it — i.e. a render now would serve stale frontend code.
  * This catches the post-`git pull` case, where a checkout rewrites the
  * sources with fresh mtimes while the untracked bundle lingers on disk.
+ * `extraSources` lists files outside `srcDir` that the bundle also inlines
+ * (the shared VT core in `../vt.ts`).
  */
-export function isBundleStale(bundlePath: string, srcDir: string): boolean {
+export function isBundleStale(
+  bundlePath: string,
+  srcDir: string,
+  extraSources: readonly string[] = []
+): boolean {
   if (!existsSync(bundlePath)) return true
   if (!existsSync(srcDir)) return false
   const bundleMtime = statSync(bundlePath).mtimeMs
@@ -33,7 +39,7 @@ export function isBundleStale(bundlePath: string, srcDir: string): boolean {
     const file = resolve(srcDir, name)
     if (statSync(file).isFile() && statSync(file).mtimeMs > bundleMtime) return true
   }
-  return false
+  return extraSources.some((file) => existsSync(file) && statSync(file).mtimeMs > bundleMtime)
 }
 
 /**
@@ -43,7 +49,8 @@ export function isBundleStale(bundlePath: string, srcDir: string): boolean {
 async function bundleNanoTerm(): Promise<void> {
   const entrypoint = resolve(__dirname, 'nanoterm/index.js')
   if (!existsSync(entrypoint)) return // Pre-bundled: skip
-  if (!isBundleStale(resolve(__dirname, 'nanoterm.js'), resolve(__dirname, 'nanoterm'))) {
+  const vtCore = resolve(__dirname, '../vt.ts')
+  if (!isBundleStale(resolve(__dirname, 'nanoterm.js'), resolve(__dirname, 'nanoterm'), [vtCore])) {
     return // Bundle is fresh: skip
   }
 
