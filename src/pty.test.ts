@@ -53,9 +53,14 @@ describe('PTY Sanitization', () => {
     expect([...sanitizePTYData(input)]).toEqual([0x61, 0xe9, 0x62, 0xff])
   })
 
-  test('leaves an unterminated OSC 52 and other escapes intact', () => {
+  test('strips an OSC 52 split across reads, since the client keeps OSC state across chunks', () => {
     const input = new TextEncoder().encode('\x1b[5n\x1b]52;c;abc')
-    expect(new TextDecoder().decode(sanitizePTYData(input))).toBe('\x1b[5n\x1b]52;c;abc')
+    expect(new TextDecoder().decode(sanitizePTYData(input))).toBe('\x1b[5n')
+  })
+
+  test('an ESC other than ST ends a stripped OSC 52 and is stripped with it', () => {
+    const input = new TextEncoder().encode('a\x1b]52;c;SGVsbG8=\x1bAQQ\\b')
+    expect(new TextDecoder().decode(sanitizePTYData(input))).toBe('aAQQ\\b')
   })
 })
 

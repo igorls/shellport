@@ -198,3 +198,17 @@ $ `)
     expect(findUrlAt('a http://a.test b http://b.test', 20)).toBe('http://b.test/')
   })
 })
+
+describe('OSC string cancel', () => {
+  test('ESC not followed by a backslash cancels an OSC instead of extending it', () => {
+    const term = new HeadlessTerm(undefined, { cols: 20, rows: 2 })
+    const writes: string[] = []
+    ;(term as unknown as { handleOsc52Clipboard: (arg: string) => void }).handleOsc52Clipboard = (
+      arg
+    ) => {
+      writes.push(arg)
+    }
+    term.write('\x1b]52;c;SGVsbG8=\x1bAQQ\\')
+    expect(writes).toEqual([])
+  })
+})

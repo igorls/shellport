@@ -600,12 +600,22 @@ const ESC = 0x1b
 const BEL = 0x07
 
 /** Length of a complete OSC 52 sequence starting at `start`, or 0 if unterminated. */
+/**
+ * Bytes to strip for an OSC 52 starting at `start`. Never returns 0: a sequence
+ * left in place reaches a client that may still execute it.
+ * - BEL or ST (`ESC \`) ends it, terminator included.
+ * - Any other ESC ends it too, and the ESC is stripped with it, so the byte after
+ *   it cannot start a new escape sequence or extend the OSC.
+ * - No terminator in this chunk: strip to the end of the chunk. Leaving it
+ *   intact let a sequence split across two PTY reads through, since the client
+ *   keeps OSC state across chunks; the tail then arrives as plain text.
+ */
 function osc52Length(data: Uint8Array, start: number): number {
   for (let j = start + 5; j < data.length; j++) {
     if (data[j] === BEL) return j - start + 1
-    if (data[j] === ESC) return data[j + 1] === 0x5c ? j - start + 2 : 0
+    if (data[j] === ESC) return data[j + 1] === 0x5c ? j - start + 2 : j - start + 1
   }
-  return 0
+  return data.length - start
 }
 
 /**
@@ -634,11 +644,8 @@ export function sanitizeTerminalOutput(data: Uint8Array): Uint8Array {
         data[i + 3] === 0x32 &&
         data[i + 4] === 0x3b
       ) {
-        const len = osc52Length(data, i)
-        if (len > 0) {
-          i += len - 1
-          continue
-        }
+        i += osc52Length(data, i) - 1
+        continue
       }
     }
     out[n++] = b
@@ -1371,6 +1378,16 @@ export class HeadlessTerm {
   }
 
   processOSC(c: string, code: number): void {
+    if (this.parseIntermediates === '\\' && code !== 0x5c) {
+      // ESC not followed by `\` cancels the string (as in xterm) and starts a new
+      // escape sequence. Appending it instead let `ESC ] 52;… ESC X … \` execute
+      // a clipboard write that the server-side sanitizer had already let pass.
+      this.oscBuffer = ''
+      this.parseState = 'escape'
+      this.parseIntermediates = ''
+      this.processChar(c)
+      return
+    }
     if (code === 0x07 || (code === 0x5c && this.parseIntermediates === '\\')) {
       this.executeOSC(this.oscBuffer)
       this.parseState = 'ground'
